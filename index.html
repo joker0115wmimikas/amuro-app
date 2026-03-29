@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  
   <title>安室RC 総合管理ポータル</title>
   
   <script src="https://cdn.tailwindcss.com"></script>
@@ -20,7 +24,6 @@
   <style>
     body { font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; background-color: #f8fafc; }
     
-    /* === 印刷用 A4 縦設定 (本物の用紙を完全再現) === */
     @media print {
       body * { visibility: hidden; }
       #print-root, #print-root * { visibility: visible; }
@@ -43,7 +46,6 @@
     import React, { useState, useEffect, useMemo } from 'react';
     import { createRoot } from 'react-dom/client';
     
-    // 安定した Google公式 の Firebase モジュール
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
     import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, setDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
@@ -54,15 +56,14 @@
       Trash2, Download, Camera, Printer, X
     } from 'lucide-react';
 
-    // =========================================================================
-    // ★ プレビュー(Canvas)と本番(GitHub)の自動判定
-    // =========================================================================
     const envConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
     const envConfig = JSON.parse(envConfigStr);
     const isCanvasEnv = Object.keys(envConfig).length > 0;
     const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-    // ★ GitHubで動かすための Firebase Config
+    // =========================================================================
+    // ★ ご自身の Firebase Config ★
+    // =========================================================================
     const manualConfig = {
       apiKey: "AIzaSyDz9kn5I_TOT9_YmFJk4BaOyMUmkCnwuh8",
       authDomain: "amuro-rc-app.firebaseapp.com",
@@ -77,11 +78,9 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
 
-    // プレビューと本番でパスを自動切り替え (エラー防止の要)
     const getColRef = (colName) => isCanvasEnv ? collection(db, 'artifacts', currentAppId, 'public', 'data', colName) : collection(db, colName);
     const getDocRef = (colName, docId) => isCanvasEnv ? doc(db, 'artifacts', currentAppId, 'public', 'data', colName, docId) : doc(db, colName, docId);
 
-    // 🛑 プレビュー環境での localStorage クラッシュ防止用安全関数
     const safeGetStorage = (key) => { try { return localStorage.getItem(key) || ''; } catch(e) { return ''; } };
     const safeSetStorage = (key, val) => { try { localStorage.setItem(key, val); } catch(e) { } };
 
@@ -103,11 +102,7 @@
       const [authReady, setAuthReady] = useState(false);
       const [printMember, setPrintMember] = useState(null);
 
-      // ==========================================
-      // 🛑 究極の無限ロード防止＆安全なデータ同期
-      // ==========================================
       useEffect(() => {
-        // もし3秒経過しても何も起きなければ、強制的に画面を表示する
         const forceUnlock = setTimeout(() => { setLoading(false); }, 3000);
 
         const initAuth = async () => {
@@ -115,26 +110,20 @@
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
               await signInWithCustomToken(auth, __initial_auth_token);
             } else {
-              await signInAnonymously(auth); // Firebase側で許可されていなくてもエラーをcatchして次に進む
+              await signInAnonymously(auth);
             }
           } catch(e) { 
-            console.error("Firebase Auth Warning (無視して進行します):", e); 
+            console.error("Firebase Auth Warning:", e); 
           }
         };
         initAuth();
         
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-          // ログインが弾かれてuserがnullでも、強制的に次に進める
-          setAuthReady(true);
-        });
-
+        const unsubscribe = onAuthStateChanged(auth, (user) => { setAuthReady(true); });
         return () => { clearTimeout(forceUnlock); unsubscribe(); };
       }, []);
 
       useEffect(() => {
         if (!authReady) return;
-        
-        // データの受信を待つが、遅い場合はやはり強制解除
         const to = setTimeout(() => setLoading(false), 2000); 
         
         const unsubMembers = onSnapshot(getColRef('members'), (snap) => {
@@ -186,7 +175,7 @@
             {view === 'procedure' && <ProcedureForm type={procedureType} members={members} onSave={handleSaveMember} setView={setView} />}
             {view === 'admin' && (
               <AdminDashboard 
-                members={members} entries={entries} tournaments={tournaments} 
+                db={db} members={members} entries={entries} tournaments={tournaments} 
                 officers={officers} adminName={adminName} apiKey={apiKey} setApiKey={setApiKey}
                 onLogout={() => { setAdminName(''); setView('portal'); }} onPrint={setPrintMember}
               />
@@ -198,7 +187,6 @@
       );
     }
 
-    // --- メニュー ---
     function PortalMenu({ setView, setType }) {
       return (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in fade-in">
@@ -226,7 +214,6 @@
       );
     }
 
-    // --- 各種申請フォーム ---
     function ProcedureForm({ type, members, onSave, setView }) {
       const isLeave = type === 'leave';
       const [mid, setMid] = useState('');
@@ -242,7 +229,12 @@
         notes: '', requests: '', goals: '', insurance: '子供 (A1 AW)', leaveReason: ''
       });
 
-      useEffect(() => { if(mid) { const m = members.find(x=>x.id===mid); if(m) setF({...f, ...m}); } }, [mid, members]);
+      useEffect(() => { 
+        if(mid) { 
+          const m = members.find(x=>x.id===mid); 
+          if(m) setF(prev => ({...prev, ...m})); 
+        } 
+      }, [mid, members]);
 
       const handleSubmit = async (e) => {
         e.preventDefault();
@@ -252,7 +244,7 @@
       };
 
       if (done) return (
-        <div className="max-w-md mx-auto p-12 bg-white rounded-3xl shadow-lg border text-center">
+        <div className="max-w-md mx-auto p-12 bg-white rounded-3xl shadow-lg border text-center animate-in zoom-in">
           <CheckCircle2 className="mx-auto text-blue-500 w-20 h-20 mb-6" />
           <h2 className="text-2xl font-bold mb-4">申請完了</h2>
           <p className="text-slate-500 mb-8">送信されました。役員が確認いたします。</p>
@@ -279,11 +271,18 @@
             )}
 
             {(type === 'new' || mid) && (
-              <div className="space-y-6">
+              <div className="space-y-6 animate-in slide-in-from-top-4">
                 {isLeave ? (
-                  <div><label className="block text-sm font-bold text-rose-600 mb-2">退会理由 (任意)</label><textarea className="w-full border rounded-xl p-4 bg-rose-50" rows="3" value={f.leaveReason} onChange={e=>setF({...f, leaveReason:e.target.value})} /></div>
+                  <div className="bg-rose-50 p-6 rounded-2xl border border-rose-200 space-y-4">
+                    <h3 className="font-bold text-rose-700 border-b border-rose-200 pb-2">退会される選手: {f.name} ({f.grade})</h3>
+                    <div>
+                      <label className="block text-sm font-bold text-rose-600 mb-2">退会理由 (任意)</label>
+                      <textarea className="w-full border border-rose-200 rounded-xl p-4 bg-white" rows="3" value={f.leaveReason || ''} onChange={e=>setF({...f, leaveReason:e.target.value})} />
+                    </div>
+                  </div>
                 ) : (
                   <>
+                    {/* (通常フォーム省略 - 入力項目は維持されています) */}
                     <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
                       <h3 className="font-bold border-b pb-2 text-slate-700">選手基本情報</h3>
                       <div className="grid grid-cols-2 gap-4">
@@ -291,7 +290,7 @@
                         <div><label className="block text-xs font-bold text-slate-500 mb-1">ふりがな</label><input required className="w-full p-3 border rounded" value={f.kana} onChange={e=>setF({...f, kana:e.target.value})} /></div>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
-                        <div><label className="block text-xs font-bold text-slate-500 mb-1">希望種目 (短距離・長距離)</label><input className="w-full p-3 border rounded placeholder-slate-300" placeholder="入力または◯" value={f.eventType} onChange={e=>setF({...f, eventType:e.target.value})} /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">希望種目</label><input className="w-full p-3 border rounded placeholder-slate-300" placeholder="短距離・長距離" value={f.eventType} onChange={e=>setF({...f, eventType:e.target.value})} /></div>
                         <div className="flex gap-2">
                           <div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">生年月日</label><input type="date" required className="w-full p-3 border rounded text-sm" value={f.birthDate} onChange={e=>setF({...f, birthDate:e.target.value})} /></div>
                           <div className="w-20"><label className="block text-xs font-bold text-slate-500 mb-1">年齢</label><input type="number" className="w-full p-3 border rounded text-center" placeholder="歳" value={f.age} onChange={e=>setF({...f, age:e.target.value})} /></div>
@@ -299,7 +298,7 @@
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="md:col-span-1"><label className="block text-xs font-bold text-slate-500 mb-1">学校名</label><input required className="w-full p-3 border rounded font-bold" value={f.schoolName} onChange={e=>setF({...f, schoolName:e.target.value})} /></div>
-                        <div><label className="block text-xs font-bold text-slate-500 mb-1">学年 (2026年度)</label><select className="w-full p-3 border rounded" value={f.grade} onChange={e=>setF({...f, grade:e.target.value})}>{GRADES.map(g=><option key={g}>{g}</option>)}</select></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">学年</label><select className="w-full p-3 border rounded" value={f.grade} onChange={e=>setF({...f, grade:e.target.value})}>{GRADES.map(g=><option key={g}>{g}</option>)}</select></div>
                         <div><label className="block text-xs font-bold text-slate-500 mb-1">性別</label><select className="w-full p-3 border rounded" value={f.gender} onChange={e=>setF({...f, gender:e.target.value})}><option>男</option><option>女</option></select></div>
                       </div>
                     </div>
@@ -370,7 +369,6 @@
       );
     }
 
-    // --- 大会エントリー ---
     function EntryForm({ members, tournaments, setView }) {
       const [tid, setTid] = useState(tournaments[0]?.id || '');
       const [mid, setMid] = useState('');
@@ -414,9 +412,10 @@
     }
 
     // --- 役員ダッシュボード ---
-    function AdminDashboard({ members, entries, tournaments, officers, adminName, apiKey, setApiKey, onLogout, onPrint }) {
+    function AdminDashboard({ db, members, entries, tournaments, officers, adminName, onLogout, onPrint }) {
       const [tab, setTab] = useState('members');
       const activeMembers = useMemo(() => members.filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)), [members]);
+      const inactiveMembers = useMemo(() => members.filter(m => !m.isActive), [members]);
 
       const downloadCSV = () => {
         const BOM = "\uFEFF";
@@ -426,6 +425,13 @@
         });
         const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `安室RC名簿.csv`; a.click();
+      };
+
+      // 🛑 任意の選手を強制削除する関数
+      const handleDeleteMember = async (m) => {
+        if(confirm(`選手「${m.name}」のデータを完全に削除しますか？\n※この操作は取り消せません。`)) {
+          await deleteDoc(getDocRef('members', m.id));
+        }
       };
 
       return (
@@ -439,28 +445,61 @@
           </div>
 
           {tab === 'members' && (
-            <div className="bg-white rounded-3xl shadow-sm border p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="font-bold text-xl border-l-4 border-emerald-500 pl-3">在籍名簿 ({activeMembers.length}名)</h2>
-                <button onClick={downloadCSV} className="text-xs bg-slate-100 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 flex items-center"><Download size={14} className="mr-1"/>CSV出力</button>
+            <div className="space-y-6 animate-in fade-in">
+              <div className="bg-white rounded-3xl shadow-sm border p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="font-bold text-xl border-l-4 border-emerald-500 pl-3">在籍名簿 ({activeMembers.length}名)</h2>
+                  <button onClick={downloadCSV} className="text-xs bg-slate-100 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 flex items-center"><Download size={14} className="mr-1"/>CSV出力</button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm whitespace-nowrap border-collapse">
+                    <thead className="bg-slate-50 border-y"><tr><th className="p-3">氏名</th><th className="p-3 text-center">学年</th><th className="p-3">連絡先(母または父)</th><th className="p-3 text-center">操作</th></tr></thead>
+                    <tbody className="divide-y">
+                      {activeMembers.map(m => (
+                        <tr key={m.id} className={`hover:bg-slate-50 ${m.status==='new'?'bg-emerald-50/50':''}`}>
+                          <td className="p-3 font-bold"><div className="text-[10px] text-slate-400 font-normal">{m.kana}</div>{m.name}</td>
+                          <td className="p-3 text-center"><span className="bg-slate-100 px-2 py-1 rounded-full text-xs font-bold">{m.grade}</span></td>
+                          <td className="p-3 font-mono text-xs">{m.parentMotherPhone || m.parentFatherPhone}</td>
+                          <td className="p-3 text-center">
+                            <div className="flex justify-center items-center gap-2">
+                              {/* 印刷ボタン */}
+                              <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-blue-600 p-2" title="印刷"><Printer size={18}/></button>
+                              {/* 🛑 強制削除ボタンの追加 */}
+                              <button onClick={() => handleDeleteMember(m)} className="text-slate-400 hover:text-rose-600 p-2" title="削除"><Trash2 size={18}/></button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm whitespace-nowrap border-collapse">
-                  <thead className="bg-slate-50 border-y"><tr><th className="p-3">氏名</th><th className="p-3 text-center">学年</th><th className="p-3">連絡先(母または父)</th><th className="p-3 text-center">印刷</th></tr></thead>
-                  <tbody className="divide-y">
-                    {activeMembers.map(m => (
-                      <tr key={m.id} className={`hover:bg-slate-50 ${m.status==='new'?'bg-emerald-50/50':''}`}>
-                        <td className="p-3 font-bold"><div className="text-[10px] text-slate-400 font-normal">{m.kana}</div>{m.name}</td>
-                        <td className="p-3 text-center"><span className="bg-slate-100 px-2 py-1 rounded-full text-xs font-bold">{m.grade}</span></td>
-                        <td className="p-3 font-mono text-xs">{m.parentMotherPhone || m.parentFatherPhone}</td>
-                        <td className="p-3 text-center">
-                          <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-blue-600 p-2"><Printer size={18}/></button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+
+              {/* 退会者リスト */}
+              {inactiveMembers.length > 0 && (
+                <div className="bg-slate-100 rounded-3xl border border-slate-200 p-6 no-print">
+                  <h2 className="font-bold text-slate-500 mb-4 flex items-center"><LogOut size={16} className="mr-2"/>退会者一覧 ({inactiveMembers.length}名)</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap opacity-75">
+                      <thead><tr className="border-b border-slate-300"><th className="pb-2">氏名</th><th className="pb-2">退会理由</th><th className="pb-2 text-center">操作</th></tr></thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {inactiveMembers.map(m => (
+                          <tr key={m.id}>
+                            <td className="py-3 font-bold">{m.name}</td>
+                            <td className="py-3 text-xs truncate max-w-[200px]">{m.leaveReason || '-'}</td>
+                            <td className="py-3 text-center">
+                              <div className="flex justify-center gap-2">
+                                <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-slate-700 p-2" title="退会届を印刷"><Printer size={16}/></button>
+                                <button onClick={() => handleDeleteMember(m)} className="text-slate-400 hover:text-rose-600 p-2" title="完全削除"><Trash2 size={16}/></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
