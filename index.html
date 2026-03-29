@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- 強力なキャッシュ防止（GitHub反映遅延対策） -->
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  
   <title>安室RC 総合管理ポータル</title>
+  
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="importmap">
     {
@@ -15,9 +21,11 @@
     }
   </script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
   <style>
     body { font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; background-color: #f8fafc; }
-    /* --- 印刷用 A4 設定 (PDFの完全再現) --- */
+    
+    /* === 印刷用 A4 縦設定 (本物の用紙を完全再現) === */
     @media print {
       body * { visibility: hidden; }
       #print-root, #print-root * { visibility: visible; }
@@ -25,9 +33,10 @@
       @page { size: A4 portrait; margin: 10mm 15mm; }
       .no-print { display: none !important; }
       table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid black !important; padding: 6px; }
-      .print-bg-gray { background-color: #f3f4f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      th, td { border: 1.5px solid black !important; padding: 6px; }
+      .print-bg-gray { background-color: #e5e7eb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
+    
     .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
   </style>
@@ -35,12 +44,11 @@
 <body>
   <div id="root"></div>
 
-  <!-- 🛑 Babel + React の実行 -->
+  <!-- 🛑 Babel + React + 安定したFirebaseモジュール -->
   <script type="text/babel" data-type="module">
     import React, { useState, useEffect, useMemo } from 'react';
     import { createRoot } from 'react-dom/client';
     
-    // 安定した Google公式 の Firebase モジュール
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
     import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, setDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
@@ -52,14 +60,13 @@
     } from 'lucide-react';
 
     // =========================================================================
-    // ★ プレビュー環境(Canvas)と、GitHub環境(本番)を自動で切り替える安全装置
+    // ★ 環境自動判定＆パス生成 (これがプレビューと本番両方でエラーを防ぎます)
     // =========================================================================
     const envConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
     const envConfig = JSON.parse(envConfigStr);
     const isCanvasEnv = Object.keys(envConfig).length > 0;
     const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-    // ★ GitHubに貼る際、ここのキーが使われます
     const manualConfig = {
       apiKey: "AIzaSyDz9kn5I_TOT9_YmFJk4BaOyMUmkCnwuh8",
       authDomain: "amuro-rc-app.firebaseapp.com",
@@ -74,7 +81,7 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
 
-    // 🛑 プレビューでクラッシュしないための厳格なパス指定ルール
+    // 🛑 【超重要】Firestoreの操作は、必ずこの関数を通すことで全画面エラーが消滅します
     const getColRef = (colName) => isCanvasEnv ? collection(db, 'artifacts', currentAppId, 'public', 'data', colName) : collection(db, colName);
     const getDocRef = (colName, docId) => isCanvasEnv ? doc(db, 'artifacts', currentAppId, 'public', 'data', colName, docId) : doc(db, colName, docId);
 
@@ -97,7 +104,6 @@
       const [authReady, setAuthReady] = useState(false);
       const [printMember, setPrintMember] = useState(null);
 
-      // 1. 安全な認証処理
       useEffect(() => {
         const initAuth = async () => {
           try {
@@ -114,11 +120,10 @@
         return () => unsubscribe();
       }, []);
 
-      // 2. データ同期
       useEffect(() => {
         if (!authReady) return;
         
-        const to = setTimeout(() => setLoading(false), 3000); // タイムアウト安全装置
+        const to = setTimeout(() => setLoading(false), 3000); // 3秒で強制ロード解除
         
         const unsubMembers = onSnapshot(getColRef('members'), (snap) => {
           setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -141,7 +146,6 @@
 
       return (
         <div className="min-h-screen flex flex-col relative">
-          {/* ヘッダー */}
           <header className="bg-slate-800 text-white p-4 shadow-md sticky top-0 z-40 no-print">
             <div className="max-w-5xl mx-auto flex justify-between items-center">
               <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setView('portal')}>
@@ -165,14 +169,13 @@
             {view === 'procedure' && <ProcedureForm type={procedureType} members={members} onSave={handleSaveMember} setView={setView} />}
             {view === 'admin' && (
               <AdminDashboard 
-                members={members} entries={entries} tournaments={tournaments} 
+                db={db} members={members} entries={entries} tournaments={tournaments} 
                 officers={officers} adminName={adminName} apiKey={apiKey} setApiKey={setApiKey}
                 onLogout={() => { setAdminName(''); setView('portal'); }} onPrint={setPrintMember}
               />
             )}
           </main>
 
-          {/* PDF完全再現の印刷画面 */}
           {printMember && <PrintTemplate member={printMember} onClose={() => setPrintMember(null)} />}
         </div>
       );
@@ -206,7 +209,7 @@
       );
     }
 
-    // --- 入会・更新・退会フォーム (実際のPDFに合わせた項目) ---
+    // --- 入会・更新・退会フォーム ---
     function ProcedureForm({ type, members, onSave, setView }) {
       const isLeave = type === 'leave';
       const [mid, setMid] = useState('');
@@ -219,7 +222,7 @@
         parentMotherName: '', parentMotherEmail: '', parentMotherPhone: '',
         postalCode: '', address: '', homePhone: '', fax: '',
         health: '', bloodType: '', height: '',
-        notes: '', requests: '', goals: '', insurance: '子供 (A1 AW)', leaveReason: ''
+        notes: '', requests: '', goals: '', insurance: '子供 A1 AW', leaveReason: ''
       });
 
       useEffect(() => { if(mid) { const m = members.find(x=>x.id===mid); if(m) setF({...f, ...m}); } }, [mid, members]);
@@ -312,7 +315,7 @@
                       <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">スポーツ保険の加入区分</label>
                         <select className="w-full p-3 border rounded bg-white" value={f.insurance} onChange={e=>setF({...f, insurance:e.target.value})}>
-                          <option>子供 (A1 AW)</option><option>大人 (A2C B)</option>
+                          <option>子供 A1 AW</option><option>大人 A2C B</option>
                         </select>
                       </div>
                     </div>
@@ -330,7 +333,6 @@
       );
     }
 
-    // --- 役員用 PIN入力 ---
     function PinInput({ onSuccess }) {
       const [v, setV] = useState('');
       return (
@@ -351,7 +353,6 @@
       );
     }
 
-    // --- 大会エントリー ---
     function EntryForm({ members, tournaments, setView }) {
       const [tid, setTid] = useState(tournaments[0]?.id || '');
       const [mid, setMid] = useState('');
@@ -362,6 +363,7 @@
 
       const handleSubmit = async (e) => {
         e.preventDefault();
+        // 🛑 ここでも getColRef を使用
         await addDoc(getColRef('entries'), { tournamentId:tid, memberId:mid, name:mem.name, events:evs, fee:evs.length*tour.eventFee, isPaid:false, createdAt:Date.now() });
         setDone(true);
       };
@@ -395,7 +397,7 @@
     }
 
     // --- 役員ダッシュボード ---
-    function AdminDashboard({ members, entries, tournaments, officers, adminName, apiKey, setApiKey, onLogout, onPrint }) {
+    function AdminDashboard({ db, members, entries, tournaments, officers, adminName, onLogout, onPrint }) {
       const [tab, setTab] = useState('members');
       const activeMembers = useMemo(() => members.filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)), [members]);
 
@@ -457,6 +459,7 @@
                         <td className="p-3 border font-bold">{m.name}<div className="text-[9px] font-normal text-slate-400">{m.grade}</div></td>
                         {['entrance','term1','term2','track','insurance'].map(f => (
                           <td key={f} className="p-1 border text-center">
+                            {/* 🛑 ここも getDocRef を使用！ */}
                             <button onClick={() => updateDoc(getDocRef('members', m.id), {[`payments.${f}`]: !m.payments?.[f]})} className={`w-8 h-8 rounded-full font-bold transition-all ${m.payments?.[f] ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-300'}`}>
                               {m.payments?.[f] ? '済' : '未'}
                             </button>
@@ -475,11 +478,13 @@
               <div className="lg:col-span-2 space-y-4">
                 {tournaments.length === 0 ? <div className="p-8 text-center text-slate-400 bg-white rounded-3xl border border-dashed">大会はありません</div> : tournaments.map(t => (
                   <div key={t.id} className="bg-white p-6 rounded-2xl border shadow-sm">
+                    {/* 🛑 ここも getDocRef を使用！ */}
                     <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">{t.name}</h3><button onClick={() => deleteDoc(getDocRef('tournaments', t.id))} className="text-slate-300 hover:text-rose-500"><Trash2 size={18}/></button></div>
                     <div className="bg-slate-50 p-4 rounded-xl space-y-2">
                       {entries.filter(e => e.tournamentId === t.id).map(e => (
                         <div key={e.id} className="flex justify-between items-center text-xs border-b pb-2">
                           <span className="font-bold">{e.name} <span className="font-normal text-slate-400">({e.events.join(',')})</span></span>
+                          {/* 🛑 ここも getDocRef を使用！ */}
                           <button onClick={()=>updateDoc(getDocRef('entries', e.id),{isPaid:!e.isPaid,receivedBy:!e.isPaid?adminName:''})} className={`px-3 py-1 rounded-full font-bold shadow-sm ${e.isPaid ? 'bg-amber-100 text-amber-700' : 'bg-white border text-slate-300'}`}>
                             {e.isPaid ? `${e.receivedBy}受領` : '未入金'}
                           </button>
@@ -491,6 +496,7 @@
               </div>
               <div className="bg-slate-800 text-white p-6 rounded-3xl h-fit sticky top-24">
                 <h3 className="font-bold mb-4 text-sm flex items-center"><Trophy size={16} className="text-amber-400 mr-2"/>大会の追加</h3>
+                {/* 🛑 ここも getColRef を使用！ */}
                 <form onSubmit={(e)=>{e.preventDefault(); const fd=new FormData(e.target); addDoc(getColRef('tournaments'),{name:fd.get('n'),eventFee:Number(fd.get('f')),events:fd.get('ev').split(',').map(s=>s.trim())}); e.target.reset();}} className="space-y-3">
                   <input name="n" placeholder="大会名" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
                   <input name="f" type="number" placeholder="種目単価 (円)" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
@@ -505,11 +511,8 @@
             <div className="max-w-xl mx-auto space-y-6">
               <div className="bg-white p-8 rounded-3xl border shadow-sm">
                 <h3 className="font-bold mb-4 flex items-center"><Users size={18} className="mr-2 text-slate-400"/>役員名</h3>
+                {/* 🛑 ここも getDocRef を使用！これで設定画面でのエラーが消えます */}
                 <textarea className="w-full border rounded-xl p-4 text-sm font-bold bg-slate-50" rows="2" defaultValue={officers.join(', ')} onBlur={(e) => setDoc(getDocRef('settings', 'officers'), {names: e.target.value.split(',').map(s=>s.trim()).filter(s=>s)})} />
-              </div>
-              <div className="bg-white p-8 rounded-3xl border shadow-sm">
-                <h3 className="font-bold mb-4 flex items-center"><Camera size={18} className="mr-2 text-emerald-500"/>AIスキャン APIキー</h3>
-                <input type="password" placeholder="AIza..." className="w-full border rounded-xl p-4 font-mono text-xs bg-slate-50" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('amuro_gemini_key', e.target.value);}} />
               </div>
               <div className="bg-rose-50 p-8 rounded-3xl border border-rose-100">
                 <h3 className="font-bold text-rose-800 mb-4"><GraduationCap size={18} className="inline mr-2"/>年度更新 (進級)</h3>
@@ -518,7 +521,9 @@
                   const batch = writeBatch(db);
                   activeMembers.forEach(m => {
                     let ng = m.grade;
-                    switch(m.grade){case'1年':ng='2年';break;case'2年':ng='3年';break;case'3年':ng='4年';break;case'4年':ng='5年';break;case'5年':ng='6年';break;case'6年':ng='中学1年(OB/OG)';break;}
+                    // 幼児を削除し、正しい順番で進級させる
+                    switch(m.grade){case'1年':ng='2年';break;case'2年':ng='3年';break;case'3年':ng='4年';break;case'4年':ng='5年';break;case'5年':ng='6年';break;case'6年':ng='中学1年(OB/OG)';break;case'中学1年(OB/OG)':ng='中学2年(OB/OG)';break;case'中学2年(OB/OG)':ng='中学3年(OB/OG)';break;case'中学3年(OB/OG)':ng='高校生以上(OB/OG)';break;}
+                    // 🛑 ここも getDocRef を使用！進級処理のエラーが消えます
                     batch.update(getDocRef('members', m.id), { grade:ng, status:'updated', payments:{term1:false,term2:false,track:false,insurance:false} });
                   });
                   await batch.commit(); alert('進級処理が完了しました。');
@@ -531,11 +536,11 @@
       );
     }
 
-    // --- 印刷用テンプレート (PDFレイアウトの完全再現) ---
+    // --- 印刷用テンプレート (PDFレイアウト完全再現) ---
     function PrintTemplate({ member, onClose }) {
       const d = new Date().toLocaleDateString('ja-JP');
       return (
-        <div className="fixed inset-0 bg-slate-900/90 z-[100] flex justify-center py-4 overflow-y-auto no-print:py-2">
+        <div className="fixed inset-0 bg-slate-900/90 z-[100] flex justify-center overflow-y-auto no-print:py-4">
           <div id="print-root" className="bg-white w-[210mm] min-h-[297mm] p-12 shadow-2xl relative text-black text-[13px] font-sans">
             <div className="no-print absolute top-4 right-4 flex gap-2">
               <button onClick={() => window.print()} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center"><Printer size={16} className="mr-2"/>印刷</button>
@@ -652,7 +657,7 @@
                 <span className="font-bold text-[14px]">※入会と同時に会則に同意致します。</span><br/><br/>
                 ※上記データーはこの会の運営に関する以外、外部に漏洩させないことをお約束致します。<br/><br/>
                 受付日 西暦 　　　年 　　月 　　日<br/><br/>
-                注意事項: 自宅電話番号(携帯)と保護者の連絡用メールアドレスは必須でお願いします。(分かり易く)<br/>
+                注意事項: 自宅電話番号(携帯)と保護者の連絡用メールアドレスは必須でお願いします。<br/>
                 　　　　: スポーツ保険加入区分は別紙『スポーツ安全保険』のしおりを熟読下さい。
               </div>
               <table className="border-collapse border-[1.5px] border-black w-48 text-center text-sm">
