@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>安室RC 総合管理ポータル</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.292.0",
+        "firebase/app": "https://esm.sh/firebase@11.6.1/app",
+        "firebase/firestore": "https://esm.sh/firebase@11.6.1/firestore",
+        "firebase/auth": "https://esm.sh/firebase@11.6.1/auth"
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; }
+    /* --- 印刷用の特殊設定 --- */
+    @media print {
+      body * { visibility: hidden; }
+      #print-root, #print-root * { visibility: visible; }
+      #print-root { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background: white; box-shadow: none; }
+      @page { size: A4 portrait; margin: 10mm; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef, useMemo } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getFirestore, collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc, writeBatch, setDoc } from 'firebase/firestore';
+    import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+    import { 
+      Users, Lock, Unlock, UserPlus, Banknote, Trophy, ChevronRight, 
+      UserCircle2, FileText, LogOut, Phone, HeartPulse, GraduationCap, 
+      Building, School, CheckCircle2, Home, ListChecks, Settings, 
+      Trash2, Download, Camera, Loader2, AlertCircle, X, Edit2, Plus,
+      Printer, ChevronDown, ChevronUp
+    } from 'lucide-react';
+
+    // --- 環境判定 ---
+    const envConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+    const envConfig = JSON.parse(envConfigStr);
+    const isCanvasEnv = Object.keys(envConfig).length > 0;
+    const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+    // =========================================================================
+    // ★ Firebaseコンソールでコピーした config をここに上書きしてください ★
+    // =========================================================================
+    const manualConfig = {
+      apiKey: "AIzaSyDz9kn5I_TOT9_YmFJk4BaOyMUmkCnwuh8",
+      authDomain: "amuro-rc-app.firebaseapp.com",
+      projectId: "amuro-rc-app",
+      storageBucket: "amuro-rc-app.firebasestorage.app",
+      messagingSenderId: "194028750411",
+      appId: "1:194028750411:web:5cce3ff1bd5b0995582fce"
+    };
+    // =========================================================================
+
+    const firebaseConfig = isCanvasEnv ? envConfig : manualConfig;
+
+    let app, db, auth, isConfigMissing = false;
+
+    if (firebaseConfig.apiKey === "YOUR_API_KEY" || !firebaseConfig.apiKey) {
+      isConfigMissing = true;
+    } else {
+      try {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+      } catch (error) {
+        console.error("Firebase init error:", error);
+        isConfigMissing = true;
+      }
+    }
+
+    const getCollectionRef = (colName) => isCanvasEnv ? collection(db, 'artifacts', currentAppId, 'public', 'data', colName) : collection(db, colName);
+    const getDocRef = (colName, docId) => isCanvasEnv ? doc(db, 'artifacts', currentAppId, 'public', 'data', colName, docId) : doc(db, colName, docId);
+
+    // --- 定数マスター ---
+    const ADMIN_PIN = "1049"; 
+    const GRADES = ['幼児','1年','2年','3年','4年','5年','6年','中学1年(OB/OG)','中学2年(OB/OG)','中学3年(OB/OG)','高校生以上(OB/OG)'];
+
+    function App() {
+      // 鍵が設定されていない場合はエラー画面を表示
+      if (isConfigMissing) {
+        return (
+          <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+            <div className="bg-white p-8 rounded-2xl shadow-xl max-w-xl w-full border-t-4 border-rose-500 text-center">
+              <AlertCircle className="w-16 h-16 text-rose-500 mx-auto mb-4" />
+              <h1 className="text-2xl font-bold text-slate-800 mb-4">データベース設定が必要です</h1>
+              <p className="text-slate-600 mb-6 text-left leading-relaxed">
+                コード内の <code>firebaseConfig</code> に、Firebaseコンソールで取得したご自身の接続情報が設定されていません。<br/><br/>
+                エラーを防ぐためアプリを一時停止しています。Firebaseの設定情報を貼り付けて、GitHubに保存してください。
+              </p>
+            </div>
+          </div>
+        );
+      }
+
+      const [view, setView] = useState('portal'); 
+      const [procedureType, setProcedureType] = useState('new');
+      const [adminName, setAdminName] = useState('');
+      
+      const [members, setMembers] = useState([]);
+      const [entries, setEntries] = useState([]);
+      const [tournaments, setTournaments] = useState([]);
+      const [accEvents, setAccEvents] = useState([]);
+      const [officers, setOfficers] = useState(["久保", "桝本", "山道", "岩﨑", "加藤"]); 
+      const [apiKey, setApiKey] = useState(() => localStorage.getItem('amuro_gemini_key') || ''); 
+      
+      const [loading, setLoading] = useState(true);
+      const [authReady, setAuthReady] = useState(false);
+      const [printMember, setPrintMember] = useState(null);
+
+      // --- Firebase 認証 ---
+      useEffect(() => {
+        const initAuth = async () => {
+          try {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              const { signInWithCustomToken } = await import('https://esm.sh/firebase@11.6.1/auth');
+              await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+              await signInAnonymously(auth);
+            }
+          } catch(e) {
+            console.error("Auth Error", e);
+          }
+        };
+        initAuth();
+        
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+          if (user) setAuthReady(true);
+        });
+        return () => unsubscribe();
+      }, []);
+
+      // --- Firebase リアルタイム同期 ---
+      useEffect(() => {
+        if (!authReady || isConfigMissing) return;
+
+        const unsubMembers = onSnapshot(getCollectionRef('members'), (snap) => {
+          const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setMembers(data); setLoading(false);
+        }, err => { console.error(err); alert("データベース接続エラー。ルール設定を「テストモード」にしたか確認してください。"); setLoading(false); });
+        
+        const unsubEntries = onSnapshot(getCollectionRef('entries'), (snap) => setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+        const unsubTournaments = onSnapshot(getCollectionRef('tournaments'), (snap) => setTournaments(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+        const unsubAccEvents = onSnapshot(getCollectionRef('accEvents'), (snap) => setAccEvents(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+        const unsubOfficers = onSnapshot(getDocRef('settings', 'officers'), (docSnap) => { if(docSnap.exists() && docSnap.data().names) setOfficers(docSnap.data().names); });
+
+        return () => { unsubMembers(); unsubEntries(); unsubTournaments(); unsubAccEvents(); unsubOfficers(); };
+      }, [authReady]);
+
+      useEffect(() => { localStorage.setItem('amuro_gemini_key', apiKey); }, [apiKey]);
+
+      const goPortal = () => setView('portal');
+      const goAdmin = () => adminName ? setView('admin') : setView('pinEntry');
+
+      const saveMember = async (data, isNew) => {
+        if (isNew) await addDoc(getCollectionRef('members'), { ...data, createdAt: Date.now() });
+        else await updateDoc(getDocRef('members', data.id), { ...data, updatedAt: Date.now() });
+      };
+      const saveEntry = async (data) => await addDoc(getCollectionRef('entries'), { ...data, createdAt: Date.now() });
+      const saveOfficerList = async (newList) => await setDoc(getDocRef('settings', 'officers'), { names: newList });
+
+      if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50"><Loader2 className="w-10 h-10 animate-spin text-blue-600 mb-4" /><p className="text-slate-600 font-bold">クラウドと接続中...</p><p className="text-xs text-slate-500 mt-2">初回は少し時間がかかる場合があります</p></div>;
+
+      return (
+        <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-20">
+          <Header view={view} goPortal={goPortal} goAdmin={goAdmin} />
+          <main className="max-w-5xl mx-auto p-4 py-8">
+            {view === 'portal' && <PortalView onSelectEntry={() => setView('entry')} onSelectProcedure={(type) => { setProcedureType(type); setView('procedure'); }} />}
+            {view === 'entry' && <EntryFormView members={members.filter(m=>m.isActive)} tournaments={tournaments} onSave={saveEntry} onBack={goPortal} />}
+            {view === 'procedure' && <ProcedureFormView type={procedureType} members={members} onSave={saveMember} onBack={goPortal} />}
+            {view === 'pinEntry' && <PinEntryView onSuccess={() => setView('adminAuth')} />}
+            {view === 'adminAuth' && <AdminAuthView officers={officers} setAdminName={(name) => { setAdminName(name); setView('admin'); }} />}
+            {view === 'admin' && <AdminDashboard db={db} members={members} entries={entries} tournaments={tournaments} accEvents={accEvents} officers={officers} saveOfficerList={saveOfficerList} adminName={adminName} apiKey={apiKey} setApiKey={setApiKey} onLogout={() => { setAdminName(''); setView('adminAuth'); }} onPrint={setPrintMember} />}
+          </main>
+          {printMember && <PrintTemplate member={printMember} onClose={() => setPrintMember(null)} />}
+        </div>
+      );
+    }
+
+    // --- 申請書 印刷用コンポーネント ---
+    function PrintTemplate({ member, onClose }) {
+      const dateStr = new Date(member.updatedAt || member.createdAt || Date.now()).toLocaleDateString('ja-JP');
+      return (
+        <div className="fixed inset-0 bg-slate-600 z-[100] overflow-y-auto flex justify-center py-10 print:p-0 print:block print:bg-white print:static">
+          <div id="print-root" className="bg-white shadow-2xl p-10 w-[210mm] min-h-[297mm] relative print:shadow-none print:w-full print:min-h-auto print:p-0 text-black">
+            <div className="no-print absolute top-4 right-4 flex gap-2">
+              <button onClick={() => window.print()} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold flex items-center shadow"><Printer className="w-4 h-4 mr-2"/>印刷 / PDF保存</button>
+              <button onClick={onClose} className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg font-bold flex items-center"><X className="w-4 h-4 mr-1"/>閉じる</button>
+            </div>
+            
+            <div className="text-right text-xs mb-2">※2026年度</div>
+            <div className="text-sm font-bold mb-4">あむろ ランニングクラブ</div>
+            <div className="flex justify-between items-end mb-6">
+              <h1 className="text-2xl font-bold tracking-widest border-b-2 border-black pb-1">安室RC 入会・更新書</h1>
+              <div className="text-sm">
+                <span className={`mr-1 ${member.status==='new'?'border-2 border-black rounded-full px-2 py-0.5':''}`}>新規</span>・
+                <span className={`mx-1 ${member.status==='updated'?'border-2 border-black rounded-full px-2 py-0.5':''}`}>更新</span>・
+                <span className={`ml-1 ${!member.isActive?'border-2 border-black rounded-full px-2 py-0.5':''}`}>退会</span> <span className="text-xs ml-1">(どれかに○)</span><br/>
+                <div className="mt-2 text-right">提出日: {dateStr}</div>
+              </div>
+            </div>
+
+            <table className="w-full border-collapse border border-black text-sm mb-4">
+              <tbody>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 w-[15%] text-center">ふりがな<br/>氏名</td>
+                  <td className="border border-black p-2 w-[35%] text-xs leading-tight">{member.kana}<br/><span className="text-base font-bold">{member.name}</span></td>
+                  <td className="border border-black p-2 bg-gray-100 w-[15%] text-center">希望種目</td>
+                  <td className="border border-black p-2 w-[35%]">{member.eventType || '短距離 ・ 長距離'}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">子供の氏名</td>
+                  <td className="border border-black p-2 font-bold">{member.name}</td>
+                  <td className="border border-black p-2 bg-gray-100 text-center">生年月日<br/>年齢</td>
+                  <td className="border border-black p-2">{member.birthDate} <span className="ml-4">{member.age ? `${member.age} 歳` : '　歳'}</span></td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">学校(学年)</td>
+                  <td className="border border-black p-2">{member.schoolName} ({member.grade})</td>
+                  <td className="border border-black p-2 bg-gray-100 text-center">性別</td>
+                  <td className="border border-black p-2">{member.gender}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">保護者氏名<br/>(父)</td>
+                  <td className="border border-black p-2">{member.parentFatherName}</td>
+                  <td className="border border-black p-2 bg-gray-100 text-center">携帯電話<br/>メール</td>
+                  <td className="border border-black p-2 leading-tight">{member.parentFatherPhone}<br/>{member.parentFatherEmail}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">保護者氏名<br/>(母)</td>
+                  <td className="border border-black p-2">{member.parentMotherName}</td>
+                  <td className="border border-black p-2 bg-gray-100 text-center">携帯電話<br/>メール</td>
+                  <td className="border border-black p-2 leading-tight">{member.parentMotherPhone}<br/>{member.parentMotherEmail}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">〒 / 現住所</td>
+                  <td colSpan="3" className="border border-black p-2">〒{member.postalCode} {member.address}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">自宅電話</td>
+                  <td className="border border-black p-2">{member.homePhone}</td>
+                  <td className="border border-black p-2 bg-gray-100 text-center">自宅FAX</td>
+                  <td className="border border-black p-2">{member.fax}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 text-center">健康状態</td>
+                  <td className="border border-black p-2">{member.health} <span className="ml-2">(血液型: {member.bloodType})</span></td>
+                  <td className="border border-black p-2 bg-gray-100 text-center">身長</td>
+                  <td className="border border-black p-2">{member.height ? `${member.height} cm` : '　　cm'}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <table className="w-full border-collapse border border-black text-sm mb-4">
+              <tbody>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 w-[20%] text-center">通達事項等<br/><span className="text-[10px]">(アレルギー体質等)</span></td>
+                  <td className="border border-black p-2 min-h-[50px] whitespace-pre-wrap">{member.notes}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 w-[20%] text-center">クラブチーム<br/>への要望</td>
+                  <td className="border border-black p-2 min-h-[50px] whitespace-pre-wrap">{member.requests}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black p-2 bg-gray-100 w-[20%] text-center">クラブチーム<br/>での目標</td>
+                  <td className="border border-black p-2 min-h-[50px] whitespace-pre-wrap">{member.goals}</td>
+                </tr>
+                {!member.isActive && (
+                  <tr>
+                    <td className="border border-black p-2 bg-rose-100 w-[20%] text-center font-bold text-rose-800">退会理由</td>
+                    <td className="border border-black p-2 min-h-[40px] whitespace-pre-wrap">{member.leaveReason}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            
+            <div className="text-sm mb-6 flex justify-between items-center">
+               <div>スポーツ保険の加入区分 <span className="mx-4">子供: A1 / AW</span> <span>大人: A2C / B</span></div>
+            </div>
+
+            <div className="flex justify-between items-end mt-8">
+              <div className="text-xs leading-relaxed">
+                ※入会と同時に会則に同意致します。<br/>
+                ※上記データーはこの会の運営に関する以外、外部に漏洩させないことをお約束致します。<br/><br/>
+                注意事項：自宅電話番号(携帯)と保護者の連絡用メールアドレスは必須でお願いします。
+              </div>
+              <table className="border-collapse border border-black text-sm w-[35%]">
+                <tbody>
+                  <tr><td className="border border-black p-2 bg-gray-100 text-center w-[40%]">受付者氏名</td><td className="border border-black p-2 h-10"></td></tr>
+                  <tr><td className="border border-black p-2 bg-gray-100 text-center w-[40%]">受付日</td><td className="border border-black p-2 h-10"></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- ヘッダー ---
+    function Header({ view, goPortal, goAdmin }) {
+      return (
+        <header className="bg-slate-800 text-white p-4 shadow-md sticky top-0 z-20 no-print">
+          <div className="max-w-5xl mx-auto flex justify-between items-center">
+            <div className="flex items-center space-x-2 cursor-pointer" onClick={goPortal}><Home className="h-6 w-6 text-blue-400" /><h1 className="text-xl font-bold tracking-wide">安室RC ポータル</h1></div>
+            <div className="flex">
+              {view === 'portal' ? (
+                <button onClick={goAdmin} className="flex items-center space-x-1 px-3 py-1.5 rounded-md text-sm font-medium bg-slate-700 text-slate-200 hover:bg-slate-600 border border-slate-600"><Lock className="w-4 h-4" /><span>役員専用</span></button>
+              ) : (view === 'entry' || view === 'procedure') ? (
+                <button onClick={goPortal} className="flex items-center space-x-1 px-3 py-1.5 rounded-md text-sm font-medium bg-white text-slate-800 shadow"><ChevronRight className="w-4 h-4 rotate-180" /><span>トップへ戻る</span></button>
+              ) : null}
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    // --- 保護者ポータルメニュー ---
+    function PortalView({ onSelectEntry, onSelectProcedure }) {
+      return (
+        <div className="max-w-3xl mx-auto animate-in fade-in space-y-8">
+          <section>
+            <div className="mb-4"><h2 className="text-xl font-bold flex items-center"><FileText className="w-5 h-5 mr-2 text-emerald-600"/>各種手続き（入会・更新・退会）</h2></div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <button onClick={() => onSelectProcedure('new')} className="bg-white p-5 rounded-2xl shadow-sm border hover:border-emerald-500 text-left group">
+                <div className="bg-emerald-100 p-2.5 rounded-xl text-emerald-600 mb-3"><UserPlus className="w-5 h-5" /></div>
+                <h3 className="font-bold mb-1">新規入会</h3><p className="text-xs text-slate-500">新しく入会される方</p>
+              </button>
+              <button onClick={() => onSelectProcedure('update')} className="bg-white p-5 rounded-2xl shadow-sm border hover:border-blue-500 text-left group">
+                <div className="bg-blue-100 p-2.5 rounded-xl text-blue-600 mb-3"><FileText className="w-5 h-5" /></div>
+                <h3 className="font-bold mb-1">継続更新</h3><p className="text-xs text-slate-500">次年度も継続される方</p>
+              </button>
+              <button onClick={() => onSelectProcedure('leave')} className="bg-white p-5 rounded-2xl shadow-sm border hover:border-rose-500 text-left group">
+                <div className="bg-rose-100 p-2.5 rounded-xl text-rose-600 mb-3"><LogOut className="w-5 h-5" /></div>
+                <h3 className="font-bold mb-1">退会手続き</h3><p className="text-xs text-slate-500">クラブを退会される方</p>
+              </button>
+            </div>
+          </section>
+          <section>
+            <div className="mb-4"><h2 className="text-xl font-bold flex items-center"><Trophy className="w-5 h-5 mr-2 text-amber-500"/>大会エントリー</h2></div>
+            <button onClick={onSelectEntry} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-2xl shadow-md hover:shadow-lg text-left flex items-center justify-between group">
+              <div className="flex items-center"><div className="bg-white/20 p-3 rounded-full text-white mr-4"><ListChecks className="w-6 h-6" /></div>
+                <div><h3 className="text-lg font-bold text-white mb-1">大会への出場申し込み</h3><p className="text-blue-100 text-sm">※名簿に登録されている選手(OB・OG含む)のみ表示されます</p></div>
+              </div>
+              <ChevronRight className="w-6 h-6 text-white group-hover:translate-x-1 transition-all" />
+            </button>
+          </section>
+        </div>
+      );
+    }
+
+    // --- 大会エントリーフォーム ---
+    function EntryFormView({ members, tournaments, onSave, onBack }) {
+      const [selectedTournamentId, setSelectedTournamentId] = useState(tournaments.length > 0 ? tournaments[0].id : '');
+      const activeTournament = tournaments.find(t => t.id === selectedTournamentId);
+      const [selectedMemberId, setSelectedMemberId] = useState('');
+      const [formData, setFormData] = useState({ entryType: 'amuro', schoolName: '', events: [] });
+      const [submittedData, setSubmittedData] = useState(null);
+
+      const sortedMembers = useMemo(() => { return [...members].sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)); }, [members]);
+      const activeMember = members.find(m => m.id === selectedMemberId);
+      const totalFee = activeTournament ? (formData.events.length * activeTournament.eventFee) : 0;
+
+      useEffect(() => { setFormData(p => ({ ...p, events: [] })); }, [selectedTournamentId, selectedMemberId]);
+
+      if (tournaments.length === 0) return <div className="max-w-xl mx-auto p-8 bg-white rounded-2xl shadow-sm text-center border"><Trophy className="w-16 h-16 text-slate-300 mx-auto mb-4" /><h2 className="text-xl font-bold text-slate-600 mb-2">現在エントリー可能な大会はありません</h2><button onClick={onBack} className="bg-slate-100 text-slate-700 px-6 py-3 rounded-xl mt-4">ポータルへ戻る</button></div>;
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!activeMember || formData.events.length === 0) return alert('選手と出場種目を選択してください。');
+        onSave({ memberId: activeMember.id, name: activeMember.name, grade: activeMember.grade, gender: activeMember.gender, entryType: formData.entryType, schoolName: formData.entryType === 'school' ? formData.schoolName : '', events: formData.events, tournamentId: activeTournament.id, tournamentName: activeTournament.name, fee: totalFee, isPaid: false, receivedBy: '' });
+        setSubmittedData({ name: activeMember.name, fee: totalFee, tName: activeTournament.name });
+      };
+
+      if (submittedData) return <div className="max-w-md mx-auto bg-white p-8 rounded-2xl shadow-sm text-center border mt-10"><CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" /><h2 className="text-2xl font-bold mb-2">エントリー完了</h2><p className="font-bold text-blue-600 mb-4 bg-blue-50 py-2 rounded-lg">{submittedData.tName}</p><p className="mb-6">集金袋に <strong className="text-blue-600 text-xl mx-1">{submittedData.fee.toLocaleString()}円</strong> を入れ役員へお渡しください。</p><button onClick={onBack} className="bg-slate-100 text-slate-700 px-6 py-3 rounded-xl w-full">ポータルへ戻る</button></div>;
+
+      return (
+        <div className="max-w-xl mx-auto animate-in slide-in-from-bottom-4">
+          <h2 className="text-2xl font-bold flex items-center mb-6"><Trophy className="w-6 h-6 mr-2 text-amber-500"/>大会エントリー</h2>
+          <select className="w-full font-bold border bg-white rounded-lg p-3 mb-4 outline-none" value={selectedTournamentId} onChange={(e) => setSelectedTournamentId(e.target.value)}>{tournaments.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <div className="p-5 border-b bg-slate-50"><h3 className="font-bold text-lg mb-3 flex items-center"><span className="bg-blue-600 text-white w-6 h-6 rounded-full inline-flex items-center justify-center text-sm mr-2">1</span>選手を選択</h3><select required className="w-full border rounded-lg p-3 outline-none font-medium" value={selectedMemberId} onChange={e => setSelectedMemberId(e.target.value)}><option value="" disabled>-- 名簿から選択 --</option>{sortedMembers.map(m => <option key={m.id} value={m.id}>{m.grade} | {m.name}</option>)}</select></div>
+            {activeMember && (
+              <div className="animate-in fade-in">
+                <div className="p-5 border-b bg-white"><h3 className="font-bold text-lg mb-3 flex items-center"><span className="bg-blue-600 text-white w-6 h-6 rounded-full inline-flex items-center justify-center text-sm mr-2">2</span>出場区分</h3><div className="grid grid-cols-2 gap-3"><label className={`border p-4 rounded-xl cursor-pointer flex flex-col items-center ${formData.entryType === 'amuro' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500' : 'bg-slate-50'}`}><input type="radio" className="sr-only" checked={formData.entryType === 'amuro'} onChange={() => setFormData({...formData, entryType: 'amuro'})} /><span className="font-bold text-sm">安室RCとして</span></label><label className={`border p-4 rounded-xl cursor-pointer flex flex-col items-center ${formData.entryType === 'school' ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-500' : 'bg-slate-50'}`}><input type="radio" className="sr-only" checked={formData.entryType === 'school'} onChange={() => setFormData({...formData, entryType: 'school'})} /><span className="font-bold text-sm">学校から出場</span></label></div>{formData.entryType === 'school' && <input type="text" required placeholder="学校名" className="w-full border rounded-lg p-3 mt-3 outline-none focus:border-emerald-500" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} />}</div>
+                <div className="p-5 border-b bg-slate-50"><h3 className="font-bold text-lg mb-3 flex items-center"><span className="bg-blue-600 text-white w-6 h-6 rounded-full inline-flex items-center justify-center text-sm mr-2">3</span>出場種目 (1種目 {activeTournament.eventFee}円)</h3><div className="flex flex-wrap gap-2">{activeTournament.events.map(ev => <button type="button" key={ev} onClick={() => setFormData(p => ({...p, events: p.events.includes(ev)?p.events.filter(e=>e!==ev):[...p.events, ev]}))} className={`px-4 py-2 rounded-full text-sm font-medium border ${formData.events.includes(ev) ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-slate-100'}`}>{ev}</button>)}</div></div>
+                <div className="p-5 bg-slate-800 text-white flex justify-between items-center"><div><span className="text-xs">合計予定額</span><div className="text-2xl font-bold">¥{totalFee.toLocaleString()}</div></div><button type="submit" className="bg-blue-500 hover:bg-blue-400 px-8 py-3 rounded-xl font-bold shadow-lg">確定する</button></div>
+              </div>
+            )}
+          </form>
+        </div>
+      );
+    }
+
+    // --- 各種手続きフォーム ---
+    function ProcedureFormView({ type, members, onSave, onBack }) {
+      const isLeave = type === 'leave'; const color = type === 'new' ? 'emerald' : type === 'update' ? 'blue' : 'rose';
+      const title = type === 'new' ? '新規入会 申請' : type === 'update' ? '継続更新 申請' : '退会 申請';
+
+      const [selectedMemberId, setSelectedMemberId] = useState(''); const [submitted, setSubmitted] = useState(false);
+      const [showDetails, setShowDetails] = useState(false);
+      const [formData, setFormData] = useState({ 
+        name: '', kana:'', grade: '1年', gender: '男子', schoolName: '', parentFatherName: '', parentFatherPhone: '',
+        eventType: '短距離・長距離', birthDate: '', age: '', parentFatherEmail: '', parentMotherName: '', parentMotherPhone: '', parentMotherEmail: '',
+        postalCode: '', address: '', homePhone: '', fax: '', health: '良好', bloodType: '', height: '', notes: '', requests: '', goals: '', leaveReason: ''
+      });
+
+      const sortedMembers = useMemo(() => { return [...members].sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)); }, [members]);
+
+      useEffect(() => { 
+        if ((type === 'update' || type === 'leave') && selectedMemberId) { 
+          const m = members.find(m => m.id === selectedMemberId); 
+          if (m) setFormData(p => ({...p, ...m})); 
+        } 
+      }, [selectedMemberId, type, members]);
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (type === 'new') onSave({ ...formData, isActive: true, status: 'new', payments: { entrance: false, track: false, insurance: false, term1: false, term2: false } }, true);
+        else if (type === 'update' && selectedMemberId) onSave({ id: selectedMemberId, ...formData, isActive: true, status: 'updated', payments: { entrance: true, track: false, insurance: false, term1: false, term2: false } }, false);
+        else if (type === 'leave' && selectedMemberId) onSave({ id: selectedMemberId, isActive: false, status: 'leaved', leaveReason: formData.leaveReason }, false);
+        setSubmitted(true);
+      };
+
+      if (submitted) return <div className="max-w-md mx-auto bg-white p-8 rounded-2xl shadow-sm text-center border mt-10"><CheckCircle2 className={`w-16 h-16 text-${color}-500 mx-auto mb-4`} /><h2 className="text-2xl font-bold mb-2">送信完了</h2><p className="text-slate-600 mb-6">{isLeave ? '退会手続きを記録しました。' : '名簿に登録/更新されました。'}</p><button onClick={onBack} className="w-full bg-slate-100 text-slate-700 px-6 py-3 rounded-xl font-bold">ポータルへ戻る</button></div>;
+
+      return (
+        <div className="max-w-2xl mx-auto"><h2 className={`text-2xl font-bold flex items-center mb-6 text-slate-800`}><FileText className={`w-6 h-6 mr-2 text-${color}-500`}/>{title}</h2>
+          <form onSubmit={handleSubmit} className={`bg-white rounded-2xl shadow-sm border border-t-4 border-t-${color}-500 p-5`}>
+            {(type === 'update' || type === 'leave') && <div className="mb-4"><label className="block text-sm font-bold text-slate-700 mb-2">対象の選手を選択</label><select required className="w-full border rounded-lg p-3 outline-none bg-slate-50 font-medium" value={selectedMemberId} onChange={e => setSelectedMemberId(e.target.value)}><option value="" disabled>-- 対象選手を選択 --</option>{sortedMembers.filter(m => m.isActive).map(m => <option key={m.id} value={m.id}>{m.grade} | {m.name}</option>)}</select></div>}
+            
+            {(!isLeave && (type === 'new' || selectedMemberId)) && (
+              <div className="space-y-4">
+                <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
+                  <h3 className="font-bold text-sm text-slate-600 border-b pb-2 mb-3">基本情報（必須）</h3>
+                  <div className="grid grid-cols-2 gap-3"><input type="text" required placeholder="選手氏名" value={formData.name} onChange={e=>setFormData({...formData, name:e.target.value})} className="border rounded-lg p-3 outline-none focus:border-blue-500"/><input type="text" required placeholder="ふりがな" value={formData.kana} onChange={e=>setFormData({...formData, kana:e.target.value})} className="border rounded-lg p-3 outline-none focus:border-blue-500"/></div>
+                  <div className="grid grid-cols-2 gap-3"><select value={formData.grade} onChange={e=>setFormData({...formData, grade:e.target.value})} className="border rounded-lg p-3 outline-none bg-white">{GRADES.map(g=><option key={g}>{g}</option>)}</select><select value={formData.gender} onChange={e=>setFormData({...formData, gender:e.target.value})} className="border rounded-lg p-3 outline-none bg-white"><option>男子</option><option>女子</option></select></div>
+                  <input type="text" required placeholder="学校名 (例: 安室小学校)" value={formData.schoolName} onChange={e=>setFormData({...formData, schoolName:e.target.value})} className="w-full border rounded-lg p-3 outline-none focus:border-blue-500"/>
+                  <div className="grid grid-cols-2 gap-3"><input type="text" required placeholder="保護者(代表) 氏名" value={formData.parentFatherName} onChange={e=>setFormData({...formData, parentFatherName:e.target.value})} className="border rounded-lg p-3 outline-none focus:border-blue-500"/><input type="tel" required placeholder="携帯電話" value={formData.parentFatherPhone} onChange={e=>setFormData({...formData, parentFatherPhone:e.target.value})} className="border rounded-lg p-3 outline-none focus:border-blue-500"/></div>
+                </div>
+
+                <div>
+                  <button type="button" onClick={() => setShowDetails(!showDetails)} className={`w-full flex items-center justify-center p-3 rounded-xl border text-sm font-bold transition-all ${showDetails ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>
+                    {showDetails ? <ChevronUp className="w-4 h-4 mr-2"/> : <ChevronDown className="w-4 h-4 mr-2"/>} 詳細項目を入力する（任意：書類印刷用）
+                  </button>
+                  {showDetails && (
+                    <div className="mt-3 space-y-3 bg-white p-4 rounded-xl border animate-in slide-in-from-top-2 text-sm">
+                      <div className="grid grid-cols-2 gap-3"><input type="text" placeholder="希望種目 (短・長)" value={formData.eventType} onChange={e=>setFormData({...formData, eventType:e.target.value})} className="border rounded p-2"/><div className="flex gap-2"><input type="date" value={formData.birthDate} onChange={e=>setFormData({...formData, birthDate:e.target.value})} className="border rounded p-2 flex-1"/><input type="text" placeholder="年齢" value={formData.age} onChange={e=>setFormData({...formData, age:e.target.value})} className="border rounded p-2 w-16"/></div></div>
+                      <input type="email" placeholder="保護者(代表) メールアドレス" value={formData.parentFatherEmail} onChange={e=>setFormData({...formData, parentFatherEmail:e.target.value})} className="w-full border rounded p-2"/>
+                      <div className="border-t pt-3 grid grid-cols-3 gap-2"><input type="text" placeholder="保護者(母) 氏名" value={formData.parentMotherName} onChange={e=>setFormData({...formData, parentMotherName:e.target.value})} className="border rounded p-2"/><input type="tel" placeholder="携帯電話" value={formData.parentMotherPhone} onChange={e=>setFormData({...formData, parentMotherPhone:e.target.value})} className="border rounded p-2"/><input type="email" placeholder="メール" value={formData.parentMotherEmail} onChange={e=>setFormData({...formData, parentMotherEmail:e.target.value})} className="border rounded p-2"/></div>
+                      <div className="border-t pt-3 flex gap-2"><input type="text" placeholder="〒" value={formData.postalCode} onChange={e=>setFormData({...formData, postalCode:e.target.value})} className="border rounded p-2 w-24"/><input type="text" placeholder="現住所" value={formData.address} onChange={e=>setFormData({...formData, address:e.target.value})} className="border rounded p-2 flex-1"/></div>
+                      <div className="grid grid-cols-3 gap-2"><input type="text" placeholder="自宅電話" value={formData.homePhone} onChange={e=>setFormData({...formData, homePhone:e.target.value})} className="border rounded p-2"/><input type="text" placeholder="自宅FAX" value={formData.fax} onChange={e=>setFormData({...formData, fax:e.target.value})} className="border rounded p-2"/><input type="text" placeholder="健康状態" value={formData.health} onChange={e=>setFormData({...formData, health:e.target.value})} className="border rounded p-2"/></div>
+                      <div className="grid grid-cols-2 gap-2"><input type="text" placeholder="血液型" value={formData.bloodType} onChange={e=>setFormData({...formData, bloodType:e.target.value})} className="border rounded p-2"/><input type="text" placeholder="身長(cm)" value={formData.height} onChange={e=>setFormData({...formData, height:e.target.value})} className="border rounded p-2"/></div>
+                      <textarea placeholder="通達事項等(アレルギー体質等)" value={formData.notes} onChange={e=>setFormData({...formData, notes:e.target.value})} className="w-full border rounded p-2" rows="2"></textarea>
+                      <textarea placeholder="クラブチームへの要望" value={formData.requests} onChange={e=>setFormData({...formData, requests:e.target.value})} className="w-full border rounded p-2" rows="2"></textarea>
+                      <textarea placeholder="クラブチームでの目標" value={formData.goals} onChange={e=>setFormData({...formData, goals:e.target.value})} className="w-full border rounded p-2" rows="2"></textarea>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isLeave && selectedMemberId && (
+              <div className="p-5"><label className="text-xs font-bold text-rose-500">退会理由 (任意)</label><textarea rows="3" value={formData.leaveReason} onChange={e=>setFormData({...formData, leaveReason:e.target.value})} className="w-full border border-rose-200 rounded p-2 mt-1 bg-rose-50 outline-none"></textarea></div>
+            )}
+
+            <button type="submit" className={`mt-6 w-full bg-${color}-600 text-white font-bold py-3.5 rounded-xl shadow-md hover:bg-${color}-700`}>この内容で保存する</button>
+          </form>
+        </div>
+      );
+    }
+
+    // --- 役員用ログイン ---
+    function PinEntryView({ onSuccess }) {
+      const [pin, setPin] = useState(''); const [error, setError] = useState(false);
+      const handleSubmit = (e) => { e.preventDefault(); if (pin === ADMIN_PIN) onSuccess(); else { setError(true); setPin(''); } };
+      return (
+        <div className="max-w-sm mx-auto mt-12 text-center"><div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200"><Lock className="w-12 h-12 text-slate-300 mx-auto mb-4" /><h2 className="text-xl font-bold mb-6">役員専用パスコード</h2><form onSubmit={handleSubmit}><input type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => { setPin(e.target.value); setError(false); }} className={`w-full text-center text-3xl tracking-widest p-4 border rounded-xl outline-none focus:ring-2 focus:ring-slate-800 ${error?'border-red-500 bg-red-50':''}`} autoFocus /><button type="submit" className="w-full mt-6 bg-slate-800 text-white font-bold py-3 rounded-xl shadow-md">ログイン</button></form></div></div>
+      );
+    }
+
+    function AdminAuthView({ officers, setAdminName }) {
+      return (
+        <div className="max-w-md mx-auto mt-12 text-center"><div className="bg-white p-8 rounded-2xl shadow-sm border"><h2 className="text-xl font-bold mb-6">担当役員を選択</h2>
+        {officers.length === 0 ? <p className="text-slate-500 text-sm">設定タブから役員名を追加してください。</p> : <div className="grid grid-cols-2 gap-3">{officers.map(name => <button key={name} onClick={() => setAdminName(name)} className="py-3 px-4 border rounded-xl font-bold hover:bg-slate-100">{name}</button>)}</div>}
+        </div></div>
+      );
+    }
+
+    // --- 役員ダッシュボードメイン ---
+    function AdminDashboard({ db, members, entries, tournaments, accEvents, officers, saveOfficerList, adminName, apiKey, setApiKey, onLogout, onPrint }) {
+      const [activeTab, setActiveTab] = useState('members');
+      
+      const activeMembers = useMemo(() => { return [...members].filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)); }, [members]);
+      const inactiveMembers = useMemo(() => { return [...members].filter(m => !m.isActive); }, [members]);
+
+      const togglePayment = async (memberId, field) => {
+        const m = members.find(x => x.id === memberId);
+        await updateDoc(getDocRef('members', memberId), { [`payments.${field}`]: !m.payments?.[field] });
+      };
+      
+      const toggleEntryPayment = async (entryId) => {
+        const e = entries.find(x => x.id === entryId);
+        await updateDoc(getDocRef('entries', entryId), { isPaid: !e.isPaid, receivedBy: !e.isPaid ? adminName : '' });
+      };
+
+      const handleDeleteMember = async (id) => { 
+        if(confirm("名簿から完全に削除しますか？")) await deleteDoc(getDocRef('members', id)); 
+      };
+
+      const handlePromoteAll = async () => {
+        if(!confirm("全員の学年を1つ上げます。よろしいですか？\n※6年生は自動的に「中学1年(OB/OG)」に移行し、名簿に残り続けます。")) return;
+        const batch = writeBatch(db);
+        members.forEach(m => {
+          if (!m.isActive) return;
+          let newGrade = m.grade;
+          switch (m.grade) { case '幼児': newGrade='1年'; break; case '1年': newGrade='2年'; break; case '2年': newGrade='3年'; break; case '3年': newGrade='4年'; break; case '4年': newGrade='5年'; break; case '5年': newGrade='6年'; break; case '6年': newGrade='中学1年(OB/OG)'; break; case '中学1年(OB/OG)': newGrade='中学2年(OB/OG)'; break; case '中学2年(OB/OG)': newGrade='中学3年(OB/OG)'; break; case '中学3年(OB/OG)': newGrade='高校生以上(OB/OG)'; break; }
+          batch.update(getDocRef('members', m.id), { grade: newGrade, status: 'updated', payments: {term1:false, term2:false, track:false, insurance:false, entrance: m.payments?.entrance||false} });
+        });
+        entries.forEach(e => { batch.delete(getDocRef('entries', e.id)); }); // エントリー全消去
+        await batch.commit();
+        alert("進級処理と集金ステータスのリセットが完了しました。");
+      };
+
+      // OCR
+      const fileInputRef = useRef(null); const [isScanning, setIsScanning] = useState(false); const [scannedData, setScannedData] = useState(null);
+      const handleFileUpload = (e) => {
+        if (!apiKey) return alert("設定タブからAPIキーを設定してください。");
+        const file = e.target.files[0]; if (!file) return;
+        setIsScanning(true); const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            const base64Data = reader.result.split(',')[1]; const mimeType = reader.result.substring(5, reader.result.indexOf(';'));
+            const prompt = `画像は陸上クラブの入会書です。以下のJSONフォーマットで抽出して。\n{"name": "漢字氏名","kana": "ふりがな","grade": "学年(例:6年)","gender": "男子 または 女子","schoolName": "学校名","parentFatherName": "保護者氏名","parentFatherPhone": "電話番号"}`;
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Data } }] }], generationConfig: { responseMimeType: "application/json" } }) });
+            const result = await response.json(); const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) setScannedData({ ...JSON.parse(text), isActive: true, status: 'new', payments: {entrance:false, track:false, insurance:false, term1:false, term2:false} }); else throw new Error();
+          } catch(err) { alert('読み取りに失敗しました。'); } finally { setIsScanning(false); }
+        }; reader.readAsDataURL(file); e.target.value = null;
+      };
+      const handleSaveScannedData = async (e) => { 
+        e.preventDefault(); 
+        await addDoc(getCollectionRef('members'), { ...scannedData, createdAt: Date.now() });
+        setScannedData(null); alert('名簿に追加しました'); 
+      };
+
+      // CSV出力
+      const downloadRosterCSV = () => {
+        if (activeMembers.length === 0) return alert("データがありません");
+        const BOM = "\uFEFF"; const headers = "氏名,ふりがな,学年,性別,学校名,保護者氏名,電話番号,状態\n";
+        const rows = activeMembers.map(m => `${m.name},${m.kana||''},${m.grade},${m.gender},${m.schoolName||''},${m.parentFatherName||''},${m.parentFatherPhone||''},${m.status==='new'?'新規':m.status==='updated'?'更新済':''}`).join("\n");
+        const blob = new Blob([BOM + headers + rows], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `安室RC名簿_${new Date().toLocaleDateString()}.csv`; link.click();
+      };
+
+      // 大会管理
+      const [editingTournament, setEditingTournament] = useState(null); const [tourForm, setTourForm] = useState({ name: '', eventFee: 600, eventsStr: '' });
+      const handleSaveTournament = async (e) => {
+        e.preventDefault(); const eventArr = tourForm.eventsStr.split(',').map(s=>s.trim()).filter(s=>s);
+        if(editingTournament) { await updateDoc(getDocRef('tournaments', editingTournament), { name: tourForm.name, eventFee: Number(tourForm.eventFee), events: eventArr }); } 
+        else { await addDoc(getCollectionRef('tournaments'), { name: tourForm.name, eventFee: Number(tourForm.eventFee), events: eventArr }); }
+        setEditingTournament(null); setTourForm({ name: '', eventFee: 600, eventsStr: '' });
+      };
+
+      // カスタム集金
+      const [showAccModal, setShowAccModal] = useState(false); const [accForm, setAccForm] = useState({ name: '', amount: '', targets: [] });
+      const handleSaveAccEvent = async (e) => { 
+        e.preventDefault(); 
+        await addDoc(getCollectionRef('accEvents'), { name: accForm.name, amount: Number(accForm.amount), targets: accForm.targets }); 
+        setShowAccModal(false); setAccForm({ name:'', amount:'', targets:[] }); 
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border no-print">
+            <div className="font-bold flex items-center text-slate-800"><UserCircle2 className="w-5 h-5 mr-2 text-slate-400" />{adminName} <span className="text-slate-500 ml-1 text-sm font-normal">役員</span></div>
+            <button onClick={onLogout} className="text-sm text-slate-500 hover:text-slate-800">ログアウト</button>
+          </div>
+          <div className="flex bg-slate-200/50 p-1.5 rounded-xl gap-1 overflow-x-auto no-print">
+            <button onClick={() => setActiveTab('members')} className={`flex-1 min-w-[80px] py-2.5 rounded-lg text-sm font-bold flex items-center justify-center ${activeTab === 'members' ? 'bg-white text-emerald-800 shadow-sm' : 'text-slate-500'}`}><Users className="w-4 h-4 mr-1 hidden sm:block" />名簿</button>
+            <button onClick={() => setActiveTab('accounting')} className={`flex-1 min-w-[80px] py-2.5 rounded-lg text-sm font-bold flex items-center justify-center ${activeTab === 'accounting' ? 'bg-white text-blue-800 shadow-sm' : 'text-slate-500'}`}><Banknote className="w-4 h-4 mr-1 hidden sm:block" />会計</button>
+            <button onClick={() => setActiveTab('entries')} className={`flex-1 min-w-[80px] py-2.5 rounded-lg text-sm font-bold flex items-center justify-center ${activeTab === 'entries' ? 'bg-white text-amber-800 shadow-sm' : 'text-slate-500'}`}><Trophy className="w-4 h-4 mr-1 hidden sm:block" />大会</button>
+            <button onClick={() => setActiveTab('settings')} className={`flex-1 min-w-[80px] py-2.5 rounded-lg text-sm font-bold flex items-center justify-center ${activeTab === 'settings' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}><Settings className="w-4 h-4 mr-1 hidden sm:block" />設定</button>
+          </div>
+
+          {/* --- 名簿管理タブ --- */}
+          {activeTab === 'members' && (
+            <div className="space-y-4 animate-in fade-in">
+              <div className="bg-white rounded-2xl shadow-sm border p-4 space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-3 no-print">
+                  <h2 className="font-bold text-lg border-l-4 border-emerald-500 pl-2">在籍名簿・OB/OG ({activeMembers.length}名)</h2>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={downloadRosterCSV} className="text-xs bg-slate-100 text-slate-700 px-3 py-2 rounded-lg font-bold hover:bg-slate-200 flex items-center"><Download className="w-4 h-4 mr-1"/>CSV出力</button>
+                    <button onClick={() => window.print()} className="text-xs bg-slate-100 text-slate-700 px-3 py-2 rounded-lg font-bold hover:bg-slate-200 flex items-center"><FileText className="w-4 h-4 mr-1"/>印刷</button>
+                    <button onClick={() => fileInputRef.current?.click()} disabled={isScanning} className="text-xs bg-emerald-600 text-white px-3 py-2 rounded-lg font-bold hover:bg-emerald-700 flex items-center shadow-sm">{isScanning ? <Loader2 className="w-4 h-4 mr-1 animate-spin"/> : <Camera className="w-4 h-4 mr-1"/>}AIスキャン追加</button>
+                    <input type="file" accept="image/*" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
+                    <thead><tr className="bg-slate-50 border-b border-t"><th className="p-3">氏名</th><th className="p-3">学年/性別</th><th className="p-3">学校</th><th className="p-3">保護者連絡先</th><th className="p-3 no-print text-center">操作</th></tr></thead>
+                    <tbody className="divide-y">
+                      {activeMembers.length === 0 ? <tr><td colSpan="5" className="p-8 text-center text-slate-400">データがありません</td></tr> : activeMembers.map(m => (
+                        <tr key={m.id} className={`hover:bg-slate-50 transition-colors ${m.status==='new'?'bg-emerald-50':m.status==='updated'?'bg-blue-50':''}`}>
+                          <td className="p-3">
+                            <div className="text-xs text-slate-500">{m.kana}</div>
+                            <div className="font-bold flex items-center">
+                              {m.name}
+                              {m.status === 'new' && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500 text-white font-bold no-print">新規</span>}
+                              {m.status === 'updated' && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] bg-blue-500 text-white font-bold no-print">更新済</span>}
+                            </div>
+                          </td>
+                          <td className="p-3"><span className="inline-block bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-700">{m.grade}</span> <span className="text-slate-500 ml-1 text-xs">{m.gender}</span></td>
+                          <td className="p-3"><span className="flex items-center text-slate-600"><School className="w-4 h-4 mr-1 text-slate-400"/>{m.schoolName || '-'}</span></td>
+                          <td className="p-3"><div className="text-slate-800">{m.parentFatherName || '-'}</div><div className="text-slate-500 flex items-center text-xs mt-0.5"><Phone className="w-3 h-3 mr-1"/>{m.parentFatherPhone || '-'}</div></td>
+                          <td className="p-3 no-print text-center">
+                            <div className="flex justify-center gap-2">
+                              <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-emerald-600 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors" title="申請書を印刷"><Printer className="w-4 h-4"/></button>
+                              <button onClick={() => handleDeleteMember(m.id)} className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors" title="削除"><Trash2 className="w-4 h-4"/></button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {inactiveMembers.length > 0 && (
+                <div className="bg-slate-100 rounded-2xl shadow-sm border border-slate-200 p-4 mt-6 no-print">
+                  <h2 className="font-bold text-slate-500 mb-4 flex items-center"><LogOut className="w-4 h-4 mr-2"/>退会者一覧 ({inactiveMembers.length}名)</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap opacity-75">
+                      <thead><tr className="border-b border-slate-300"><th className="pb-2">氏名</th><th className="pb-2">退会理由</th><th className="pb-2 text-center">操作</th></tr></thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {inactiveMembers.map(m => (
+                          <tr key={m.id}>
+                            <td className="py-2">{m.name}</td><td className="py-2 text-xs truncate max-w-[200px]">{m.leaveReason || '-'}</td>
+                            <td className="py-2 text-center">
+                              <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-slate-700 mr-2" title="退会届を印刷"><Printer className="w-4 h-4 inline"/></button>
+                              <button onClick={() => handleDeleteMember(m.id)} className="text-slate-400 hover:text-rose-600"><Trash2 className="w-4 h-4 inline"/></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {scannedData && (
+                <div className="fixed inset-0 bg-slate-800/50 flex items-center justify-center p-4 z-50 animate-in fade-in no-print">
+                  <div className="bg-white rounded-2xl p-6 shadow-2xl w-full max-w-md border-t-4 border-emerald-500">
+                    <h3 className="text-lg font-bold mb-4 flex items-center"><Camera className="w-5 h-5 mr-2 text-emerald-600"/>読み取り結果確認</h3>
+                    <form onSubmit={handleSaveScannedData} className="space-y-3">
+                      <div><label className="text-xs font-bold text-slate-500">氏名</label><input type="text" value={scannedData.name||''} onChange={e=>setScannedData({...scannedData, name:e.target.value})} className="w-full border rounded p-2 text-sm font-bold"/></div>
+                      <div><label className="text-xs font-bold text-slate-500">ふりがな</label><input type="text" value={scannedData.kana||''} onChange={e=>setScannedData({...scannedData, kana:e.target.value})} className="w-full border rounded p-2 text-sm"/></div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div><label className="text-xs font-bold text-slate-500">学年</label><input type="text" value={scannedData.grade||''} onChange={e=>setScannedData({...scannedData, grade:e.target.value})} className="w-full border rounded p-2 text-sm"/></div>
+                        <div><label className="text-xs font-bold text-slate-500">性別</label><input type="text" value={scannedData.gender||''} onChange={e=>setScannedData({...scannedData, gender:e.target.value})} className="w-full border rounded p-2 text-sm"/></div>
+                      </div>
+                      <div><label className="text-xs font-bold text-slate-500">学校名</label><input type="text" value={scannedData.schoolName||''} onChange={e=>setScannedData({...scannedData, schoolName:e.target.value})} className="w-full border rounded p-2 text-sm"/></div>
+                      <div><label className="text-xs font-bold text-slate-500">保護者氏名</label><input type="text" value={scannedData.parentFatherName||''} onChange={e=>setScannedData({...scannedData, parentFatherName:e.target.value})} className="w-full border rounded p-2 text-sm"/></div>
+                      <div><label className="text-xs font-bold text-slate-500">電話番号</label><input type="text" value={scannedData.parentFatherPhone||''} onChange={e=>setScannedData({...scannedData, parentFatherPhone:e.target.value})} className="w-full border rounded p-2 text-sm"/></div>
+                      <div className="flex gap-3 mt-6 pt-4 border-t">
+                        <button type="button" onClick={() => setScannedData(null)} className="flex-1 bg-slate-100 py-2.5 rounded-lg font-bold text-slate-600">キャンセル</button>
+                        <button type="submit" className="flex-1 bg-emerald-600 py-2.5 rounded-lg font-bold text-white shadow">登録する</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* --- 会計管理タブ --- */}
+          {activeTab === 'accounting' && (
+            <div className="space-y-4 animate-in fade-in">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-white rounded-2xl shadow-sm border p-4">
+                  <h2 className="font-bold text-lg mb-4 border-l-4 border-blue-500 pl-2">基本集金チェック</h2>
+                  <div className="overflow-x-auto max-h-[60vh]">
+                    <table className="w-full text-left text-sm whitespace-nowrap border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 sticky top-0 border-b border-t shadow-sm z-10">
+                          <th className="p-3">氏名/学年</th><th className="p-2 text-center w-16">入会金</th><th className="p-2 text-center w-16">前期</th><th className="p-2 text-center w-16">後期</th><th className="p-2 text-center w-16">競技場</th><th className="p-2 text-center w-16">保険</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {activeMembers.filter(m => !m.grade.includes('OB')).map(m => (
+                          <tr key={m.id} className="hover:bg-slate-50">
+                            <td className="p-3"><div className="font-bold text-slate-800">{m.name}</div><div className="text-[10px] text-slate-500">{m.grade}</div></td>
+                            {['entrance','term1','term2','track','insurance'].map(field => (
+                              <td key={field} className="p-2 text-center">
+                                <button onClick={() => togglePayment(m.id, field)} className={`w-8 h-8 rounded-full flex items-center justify-center mx-auto transition-colors ${m.payments?.[field] ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-300 hover:bg-slate-200'}`}>
+                                  {m.payments?.[field] ? <CheckCircle2 className="w-5 h-5" /> : <span className="text-[10px] font-bold">未</span>}
+                                </button>
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="bg-white rounded-2xl shadow-sm border p-4">
+                    <div className="flex justify-between items-center mb-4"><h2 className="font-bold text-lg border-l-4 border-indigo-500 pl-2">カスタム集金一覧</h2><button onClick={() => setShowAccModal(true)} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm flex items-center"><Plus className="w-4 h-4 mr-1"/>作成</button></div>
+                    {accEvents.length === 0 ? <div className="text-center p-6 text-slate-400 text-sm">作成された集金イベントはありません</div> : (
+                      <div className="space-y-3">
+                        {accEvents.map(acc => (
+                          <div key={acc.id} className="border rounded-xl p-3 hover:border-indigo-300 transition-colors">
+                            <div className="flex justify-between items-center mb-2"><h3 className="font-bold text-slate-800">{acc.name}</h3><span className="text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded text-sm">¥{acc.amount?.toLocaleString()}</span></div>
+                            <div className="text-xs text-slate-500 mb-2">対象: {acc.targets.length===0 ? '全員' : acc.targets.join(', ')}</div>
+                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-1">
+                              <div className="bg-indigo-500 h-full" style={{ width: `${Math.random()*100}%` }}></div>
+                            </div>
+                            <div className="text-[10px] text-right text-slate-400">※未実装(モック)</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {showAccModal && (
+                <div className="fixed inset-0 bg-slate-800/50 flex items-center justify-center p-4 z-50">
+                  <div className="bg-white rounded-2xl p-6 shadow-2xl w-full max-w-md animate-in zoom-in-95">
+                    <h3 className="text-lg font-bold mb-4">新しい集金イベント作成</h3>
+                    <form onSubmit={handleSaveAccEvent} className="space-y-4">
+                      <div><label className="text-xs font-bold text-slate-500">集金名</label><input type="text" required placeholder="例: 夏期合宿 参加費" value={accForm.name} onChange={e=>setAccForm({...accForm, name:e.target.value})} className="w-full border rounded-lg p-3 mt-1"/></div>
+                      <div><label className="text-xs font-bold text-slate-500">1人あたりの金額(円)</label><input type="number" required value={accForm.amount} onChange={e=>setAccForm({...accForm, amount:e.target.value})} className="w-full border rounded-lg p-3 mt-1 font-mono"/></div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 mb-2 block">対象学年（未選択で全員）</label>
+                        <div className="flex flex-wrap gap-2">
+                          {['4年','5年','6年'].map(g => (
+                            <button type="button" key={g} onClick={() => setAccForm(p => ({...p, targets: p.targets.includes(g)?p.targets.filter(x=>x!==g):[...p.targets, g]}))} className={`px-3 py-1.5 border rounded-full text-xs font-bold ${accForm.targets.includes(g) ? 'bg-indigo-600 text-white border-indigo-600' : 'text-slate-500 hover:bg-slate-50'}`}>{g}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex gap-3 mt-6 pt-4 border-t"><button type="button" onClick={() => setShowAccModal(false)} className="flex-1 bg-slate-100 py-3 rounded-xl font-bold text-slate-600">キャンセル</button><button type="submit" className="flex-1 bg-indigo-600 py-3 rounded-xl font-bold text-white shadow">作成する</button></div>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* --- 大会管理タブ --- */}
+          {activeTab === 'entries' && (
+            <div className="space-y-4 animate-in fade-in">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border p-4">
+                  <h2 className="font-bold text-lg mb-4 border-l-4 border-amber-500 pl-2">大会ごとの申込・集金状況</h2>
+                  {tournaments.length === 0 ? <p className="text-slate-500 text-sm text-center py-8">登録された大会はありません</p> : (
+                    <div className="space-y-6">
+                      {tournaments.map(t => {
+                        const tEntries = entries.filter(e => e.tournamentId === t.id);
+                        const totalAmt = tEntries.reduce((sum, e) => sum + e.fee, 0);
+                        const paidAmt = tEntries.filter(e => e.isPaid).reduce((sum, e) => sum + e.fee, 0);
+                        return (
+                          <div key={t.id} className="border rounded-xl p-4 bg-slate-50/50">
+                            <div className="flex justify-between items-start mb-4">
+                              <div><h3 className="font-bold text-lg text-slate-800">{t.name}</h3><p className="text-xs text-slate-500 mt-1">1種目: ¥{t.eventFee} | 選択可能: {t.events.join(', ')}</p></div>
+                              <div className="text-right">
+                                <div className="text-sm text-slate-500 mb-1">集金状況</div>
+                                <div className="font-mono font-bold"><span className={paidAmt === totalAmt && totalAmt > 0 ? "text-emerald-600" : "text-amber-600"}>¥{paidAmt.toLocaleString()}</span> <span className="text-slate-400">/ ¥{totalAmt.toLocaleString()}</span></div>
+                              </div>
+                            </div>
+                            {tEntries.length > 0 ? (
+                              <div className="overflow-x-auto bg-white rounded-lg border">
+                                <table className="w-full text-left text-sm whitespace-nowrap">
+                                  <thead><tr className="bg-slate-100 border-b"><th className="p-2">選手名</th><th className="p-2">出場区分</th><th className="p-2">種目</th><th className="p-2 text-right">金額</th><th className="p-2 text-center">入金確認</th></tr></thead>
+                                  <tbody className="divide-y">
+                                    {tEntries.map(e => (
+                                      <tr key={e.id} className="hover:bg-slate-50">
+                                        <td className="p-2 font-bold">{e.name} <span className="text-[10px] text-slate-400 ml-1">{e.grade}</span></td>
+                                        <td className="p-2 text-xs">{e.entryType === 'school' ? <span className="text-emerald-600 bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200">{e.schoolName}</span> : <span className="text-blue-600">安室RC</span>}</td>
+                                        <td className="p-2 text-xs max-w-[150px] truncate" title={e.events.join(', ')}>{e.events.join(', ')}</td>
+                                        <td className="p-2 text-right font-mono">¥{e.fee.toLocaleString()}</td>
+                                        <td className="p-2 text-center">
+                                          <button onClick={() => toggleEntryPayment(e.id)} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center justify-center mx-auto w-24 ${e.isPaid ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-white text-slate-400 border hover:bg-slate-50'}`}>
+                                            {e.isPaid ? <><CheckCircle2 className="w-3 h-3 mr-1"/>{e.receivedBy}受領</> : '未受領'}
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : <div className="text-center text-xs text-slate-400 bg-white py-4 rounded-lg border border-dashed">申込者はまだいません</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-800 text-white rounded-2xl shadow-sm border border-slate-700 p-5 h-fit sticky top-24">
+                  <h2 className="font-bold text-lg mb-4 flex items-center"><Trophy className="w-5 h-5 mr-2 text-amber-400"/>大会の追加・編集</h2>
+                  <form onSubmit={handleSaveTournament} className="space-y-4">
+                    <div><label className="text-xs font-bold text-slate-400">大会名</label><input type="text" required value={tourForm.name} onChange={e=>setTourForm({...tourForm, name:e.target.value})} placeholder="例: 姫路市陸上競技大会" className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white outline-none focus:border-amber-500 mt-1"/></div>
+                    <div><label className="text-xs font-bold text-slate-400">1種目の参加費 (円)</label><input type="number" required value={tourForm.eventFee} onChange={e=>setTourForm({...tourForm, eventFee:e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white outline-none focus:border-amber-500 mt-1 font-mono"/></div>
+                    <div><label className="text-xs font-bold text-slate-400 block mb-1">選択可能な種目（カンマ区切り）</label><textarea required rows="3" value={tourForm.eventsStr} onChange={e=>setTourForm({...tourForm, eventsStr:e.target.value})} placeholder="例: 100m, 800m, 走幅跳, 4x100mリレー" className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white outline-none focus:border-amber-500 text-sm"></textarea></div>
+                    <button type="submit" className="w-full bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold py-3 rounded-xl shadow mt-2">{editingTournament ? '更新する' : '新しく追加する'}</button>
+                    {editingTournament && <button type="button" onClick={() => { setEditingTournament(null); setTourForm({ name: '', eventFee: 600, eventsStr: '' }); }} className="w-full bg-slate-700 hover:bg-slate-600 py-3 rounded-xl font-bold mt-2 text-sm">キャンセル</button>}
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* --- 設定・危険ゾーンタブ --- */}
+          {activeTab === 'settings' && (
+            <div className="space-y-6 animate-in fade-in max-w-2xl mx-auto">
+              <div className="bg-white rounded-2xl shadow-sm border p-6">
+                <h2 className="font-bold text-lg mb-4 flex items-center"><Users className="w-5 h-5 mr-2 text-slate-500"/>役員名の管理</h2>
+                <p className="text-sm text-slate-500 mb-4">ログイン時や集金受領時に表示される役員の名前をカンマ(,)区切りで入力してください。</p>
+                <textarea className="w-full border rounded-xl p-4 text-sm font-bold bg-slate-50 focus:bg-white focus:border-slate-800 outline-none" rows="3" defaultValue={officers.join(', ')} onBlur={(e) => { const newList = e.target.value.split(',').map(s=>s.trim()).filter(s=>s); if(newList.length>0) saveOfficerList(newList); }}></textarea>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow-sm border p-6">
+                <h2 className="font-bold text-lg mb-4 flex items-center"><Settings className="w-5 h-5 mr-2 text-slate-500"/>AIスキャン APIキー (Gemini)</h2>
+                <p className="text-sm text-slate-500 mb-4">申請書の写真を読み取って自動入力する機能を使うためのGoogle Gemini APIキーを入力してください。（ブラウザに保存されます）</p>
+                <input type="password" placeholder="AIzaSy..." value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full border rounded-xl p-3 text-sm font-mono focus:border-emerald-500 outline-none" />
+              </div>
+
+              <div className="bg-rose-50 rounded-2xl shadow-sm border border-rose-200 p-6 mt-12">
+                <h2 className="font-bold text-lg text-rose-700 mb-2 flex items-center"><AlertCircle className="w-5 h-5 mr-2"/>年度更新・進級処理</h2>
+                <p className="text-sm text-rose-600/80 mb-6">4月の新年度に行う操作です。全員の学年を1つ上げ、集金状態と大会エントリー履歴をすべてリセットします。この操作は取り消せません。</p>
+                <button onClick={handlePromoteAll} className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3.5 rounded-xl shadow-sm flex items-center justify-center"><GraduationCap className="w-5 h-5 mr-2"/>全員を進級させる（年度更新）</button>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
