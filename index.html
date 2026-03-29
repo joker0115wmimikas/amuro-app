@@ -3,11 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- 強力なキャッシュ防止（GitHub反映遅延対策） -->
-  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
-  
   <title>安室RC 総合管理ポータル</title>
   
   <script src="https://cdn.tailwindcss.com"></script>
@@ -44,11 +39,11 @@
 <body>
   <div id="root"></div>
 
-  <!-- 🛑 Babel + React + 安定したFirebaseモジュール -->
   <script type="text/babel" data-type="module">
     import React, { useState, useEffect, useMemo } from 'react';
     import { createRoot } from 'react-dom/client';
     
+    // 安定した Google公式 の Firebase モジュール
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
     import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, setDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
@@ -60,13 +55,14 @@
     } from 'lucide-react';
 
     // =========================================================================
-    // ★ 環境自動判定＆パス生成 (これがプレビューと本番両方でエラーを防ぎます)
+    // ★ プレビュー(Canvas)と本番(GitHub)の自動判定
     // =========================================================================
     const envConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
     const envConfig = JSON.parse(envConfigStr);
     const isCanvasEnv = Object.keys(envConfig).length > 0;
     const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
+    // ★ GitHubで動かすための Firebase Config
     const manualConfig = {
       apiKey: "AIzaSyDz9kn5I_TOT9_YmFJk4BaOyMUmkCnwuh8",
       authDomain: "amuro-rc-app.firebaseapp.com",
@@ -81,11 +77,14 @@
     const db = getFirestore(app);
     const auth = getAuth(app);
 
-    // 🛑 【超重要】Firestoreの操作は、必ずこの関数を通すことで全画面エラーが消滅します
+    // プレビューと本番でパスを自動切り替え (エラー防止の要)
     const getColRef = (colName) => isCanvasEnv ? collection(db, 'artifacts', currentAppId, 'public', 'data', colName) : collection(db, colName);
     const getDocRef = (colName, docId) => isCanvasEnv ? doc(db, 'artifacts', currentAppId, 'public', 'data', colName, docId) : doc(db, colName, docId);
 
-    // 定数
+    // 🛑 プレビュー環境での localStorage クラッシュ防止用安全関数
+    const safeGetStorage = (key) => { try { return localStorage.getItem(key) || ''; } catch(e) { return ''; } };
+    const safeSetStorage = (key, val) => { try { localStorage.setItem(key, val); } catch(e) { } };
+
     const GRADES = ['1年','2年','3年','4年','5年','6年','中学1年(OB/OG)','中学2年(OB/OG)','中学3年(OB/OG)','高校生以上(OB/OG)'];
     const ADMIN_PIN = "1049";
 
@@ -98,41 +97,54 @@
       const [entries, setEntries] = useState([]);
       const [tournaments, setTournaments] = useState([]);
       const [officers, setOfficers] = useState(["久保", "桝本", "山道", "岩﨑", "加藤"]);
-      const [apiKey, setApiKey] = useState(() => localStorage.getItem('amuro_gemini_key') || '');
+      const [apiKey, setApiKey] = useState(() => safeGetStorage('amuro_gemini_key'));
       
       const [loading, setLoading] = useState(true);
       const [authReady, setAuthReady] = useState(false);
       const [printMember, setPrintMember] = useState(null);
 
+      // ==========================================
+      // 🛑 究極の無限ロード防止＆安全なデータ同期
+      // ==========================================
       useEffect(() => {
+        // もし3秒経過しても何も起きなければ、強制的に画面を表示する
+        const forceUnlock = setTimeout(() => { setLoading(false); }, 3000);
+
         const initAuth = async () => {
           try {
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
               await signInWithCustomToken(auth, __initial_auth_token);
             } else {
-              await signInAnonymously(auth);
+              await signInAnonymously(auth); // Firebase側で許可されていなくてもエラーをcatchして次に進む
             }
-          } catch(e) { console.error("Auth Error", e); }
+          } catch(e) { 
+            console.error("Firebase Auth Warning (無視して進行します):", e); 
+          }
         };
         initAuth();
         
-        const unsubscribe = onAuthStateChanged(auth, (user) => { if(user) setAuthReady(true); });
-        return () => unsubscribe();
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+          // ログインが弾かれてuserがnullでも、強制的に次に進める
+          setAuthReady(true);
+        });
+
+        return () => { clearTimeout(forceUnlock); unsubscribe(); };
       }, []);
 
       useEffect(() => {
         if (!authReady) return;
         
-        const to = setTimeout(() => setLoading(false), 3000); // 3秒で強制ロード解除
+        // データの受信を待つが、遅い場合はやはり強制解除
+        const to = setTimeout(() => setLoading(false), 2000); 
         
         const unsubMembers = onSnapshot(getColRef('members'), (snap) => {
           setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
           setLoading(false); clearTimeout(to);
-        }, err => { console.error(err); setLoading(false); });
+        }, err => { console.error("DB Error:", err); setLoading(false); });
 
-        onSnapshot(getColRef('entries'), s => setEntries(s.docs.map(d => ({id:d.id, ...d.data()}))));
-        onSnapshot(getColRef('tournaments'), s => setTournaments(s.docs.map(d => ({id:d.id, ...d.data()}))));
-        onSnapshot(getDocRef('settings', 'officers'), d => { if(d.exists()) setOfficers(d.data().names); });
+        onSnapshot(getColRef('entries'), s => setEntries(s.docs.map(d => ({id:d.id, ...d.data()}))), e => console.warn(e));
+        onSnapshot(getColRef('tournaments'), s => setTournaments(s.docs.map(d => ({id:d.id, ...d.data()}))), e => console.warn(e));
+        onSnapshot(getDocRef('settings', 'officers'), d => { if(d.exists()) setOfficers(d.data().names); }, e => console.warn(e));
 
         return () => { unsubMembers(); clearTimeout(to); };
       }, [authReady]);
@@ -142,7 +154,12 @@
         else await updateDoc(getDocRef('members', data.id), { ...data, updatedAt: Date.now() });
       };
 
-      if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-white"><div className="loader mb-4"></div><p className="font-bold text-slate-600">安室RC 起動中...</p></div>;
+      if (loading) return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-white">
+          <div className="loader mb-4"></div>
+          <p className="font-bold text-slate-600">安室RC 起動中...</p>
+        </div>
+      );
 
       return (
         <div className="min-h-screen flex flex-col relative">
@@ -169,7 +186,7 @@
             {view === 'procedure' && <ProcedureForm type={procedureType} members={members} onSave={handleSaveMember} setView={setView} />}
             {view === 'admin' && (
               <AdminDashboard 
-                db={db} members={members} entries={entries} tournaments={tournaments} 
+                members={members} entries={entries} tournaments={tournaments} 
                 officers={officers} adminName={adminName} apiKey={apiKey} setApiKey={setApiKey}
                 onLogout={() => { setAdminName(''); setView('portal'); }} onPrint={setPrintMember}
               />
@@ -209,7 +226,7 @@
       );
     }
 
-    // --- 入会・更新・退会フォーム ---
+    // --- 各種申請フォーム ---
     function ProcedureForm({ type, members, onSave, setView }) {
       const isLeave = type === 'leave';
       const [mid, setMid] = useState('');
@@ -222,7 +239,7 @@
         parentMotherName: '', parentMotherEmail: '', parentMotherPhone: '',
         postalCode: '', address: '', homePhone: '', fax: '',
         health: '', bloodType: '', height: '',
-        notes: '', requests: '', goals: '', insurance: '子供 A1 AW', leaveReason: ''
+        notes: '', requests: '', goals: '', insurance: '子供 (A1 AW)', leaveReason: ''
       });
 
       useEffect(() => { if(mid) { const m = members.find(x=>x.id===mid); if(m) setF({...f, ...m}); } }, [mid, members]);
@@ -315,7 +332,7 @@
                       <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">スポーツ保険の加入区分</label>
                         <select className="w-full p-3 border rounded bg-white" value={f.insurance} onChange={e=>setF({...f, insurance:e.target.value})}>
-                          <option>子供 A1 AW</option><option>大人 A2C B</option>
+                          <option>子供 (A1 AW)</option><option>大人 (A2C B)</option>
                         </select>
                       </div>
                     </div>
@@ -353,6 +370,7 @@
       );
     }
 
+    // --- 大会エントリー ---
     function EntryForm({ members, tournaments, setView }) {
       const [tid, setTid] = useState(tournaments[0]?.id || '');
       const [mid, setMid] = useState('');
@@ -363,7 +381,6 @@
 
       const handleSubmit = async (e) => {
         e.preventDefault();
-        // 🛑 ここでも getColRef を使用
         await addDoc(getColRef('entries'), { tournamentId:tid, memberId:mid, name:mem.name, events:evs, fee:evs.length*tour.eventFee, isPaid:false, createdAt:Date.now() });
         setDone(true);
       };
@@ -397,7 +414,7 @@
     }
 
     // --- 役員ダッシュボード ---
-    function AdminDashboard({ db, members, entries, tournaments, officers, adminName, onLogout, onPrint }) {
+    function AdminDashboard({ members, entries, tournaments, officers, adminName, apiKey, setApiKey, onLogout, onPrint }) {
       const [tab, setTab] = useState('members');
       const activeMembers = useMemo(() => members.filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)), [members]);
 
@@ -459,7 +476,6 @@
                         <td className="p-3 border font-bold">{m.name}<div className="text-[9px] font-normal text-slate-400">{m.grade}</div></td>
                         {['entrance','term1','term2','track','insurance'].map(f => (
                           <td key={f} className="p-1 border text-center">
-                            {/* 🛑 ここも getDocRef を使用！ */}
                             <button onClick={() => updateDoc(getDocRef('members', m.id), {[`payments.${f}`]: !m.payments?.[f]})} className={`w-8 h-8 rounded-full font-bold transition-all ${m.payments?.[f] ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-300'}`}>
                               {m.payments?.[f] ? '済' : '未'}
                             </button>
@@ -478,13 +494,11 @@
               <div className="lg:col-span-2 space-y-4">
                 {tournaments.length === 0 ? <div className="p-8 text-center text-slate-400 bg-white rounded-3xl border border-dashed">大会はありません</div> : tournaments.map(t => (
                   <div key={t.id} className="bg-white p-6 rounded-2xl border shadow-sm">
-                    {/* 🛑 ここも getDocRef を使用！ */}
                     <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">{t.name}</h3><button onClick={() => deleteDoc(getDocRef('tournaments', t.id))} className="text-slate-300 hover:text-rose-500"><Trash2 size={18}/></button></div>
                     <div className="bg-slate-50 p-4 rounded-xl space-y-2">
                       {entries.filter(e => e.tournamentId === t.id).map(e => (
                         <div key={e.id} className="flex justify-between items-center text-xs border-b pb-2">
                           <span className="font-bold">{e.name} <span className="font-normal text-slate-400">({e.events.join(',')})</span></span>
-                          {/* 🛑 ここも getDocRef を使用！ */}
                           <button onClick={()=>updateDoc(getDocRef('entries', e.id),{isPaid:!e.isPaid,receivedBy:!e.isPaid?adminName:''})} className={`px-3 py-1 rounded-full font-bold shadow-sm ${e.isPaid ? 'bg-amber-100 text-amber-700' : 'bg-white border text-slate-300'}`}>
                             {e.isPaid ? `${e.receivedBy}受領` : '未入金'}
                           </button>
@@ -496,7 +510,6 @@
               </div>
               <div className="bg-slate-800 text-white p-6 rounded-3xl h-fit sticky top-24">
                 <h3 className="font-bold mb-4 text-sm flex items-center"><Trophy size={16} className="text-amber-400 mr-2"/>大会の追加</h3>
-                {/* 🛑 ここも getColRef を使用！ */}
                 <form onSubmit={(e)=>{e.preventDefault(); const fd=new FormData(e.target); addDoc(getColRef('tournaments'),{name:fd.get('n'),eventFee:Number(fd.get('f')),events:fd.get('ev').split(',').map(s=>s.trim())}); e.target.reset();}} className="space-y-3">
                   <input name="n" placeholder="大会名" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
                   <input name="f" type="number" placeholder="種目単価 (円)" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
@@ -511,22 +524,22 @@
             <div className="max-w-xl mx-auto space-y-6">
               <div className="bg-white p-8 rounded-3xl border shadow-sm">
                 <h3 className="font-bold mb-4 flex items-center"><Users size={18} className="mr-2 text-slate-400"/>役員名</h3>
-                {/* 🛑 ここも getDocRef を使用！これで設定画面でのエラーが消えます */}
-                <textarea className="w-full border rounded-xl p-4 text-sm font-bold bg-slate-50" rows="2" defaultValue={officers.join(', ')} onBlur={(e) => setDoc(getDocRef('settings', 'officers'), {names: e.target.value.split(',').map(s=>s.trim()).filter(s=>s)})} />
+                <textarea className="w-full border rounded-xl p-4 text-sm font-bold bg-slate-50" rows="2" defaultValue={(officers || []).join(', ')} onBlur={(e) => setDoc(getDocRef('settings', 'officers'), {names: e.target.value.split(',').map(s=>s.trim()).filter(s=>s)})} />
+              </div>
+              <div className="bg-white p-8 rounded-3xl border shadow-sm">
+                <h3 className="font-bold mb-4 flex items-center"><Camera size={18} className="mr-2 text-emerald-500"/>AIスキャン APIキー</h3>
+                <input type="password" placeholder="AIza..." className="w-full border rounded-xl p-4 font-mono text-xs bg-slate-50" value={apiKey} onChange={e => {setApiKey(e.target.value); safeSetStorage('amuro_gemini_key', e.target.value);}} />
               </div>
               <div className="bg-rose-50 p-8 rounded-3xl border border-rose-100">
                 <h3 className="font-bold text-rose-800 mb-4"><GraduationCap size={18} className="inline mr-2"/>年度更新 (進級)</h3>
                 <button onClick={async () => {
                   if(!confirm("全員の学年を上げ、集金をリセットします。よろしいですか？")) return;
-                  const batch = writeBatch(db);
                   activeMembers.forEach(m => {
                     let ng = m.grade;
-                    // 幼児を削除し、正しい順番で進級させる
                     switch(m.grade){case'1年':ng='2年';break;case'2年':ng='3年';break;case'3年':ng='4年';break;case'4年':ng='5年';break;case'5年':ng='6年';break;case'6年':ng='中学1年(OB/OG)';break;case'中学1年(OB/OG)':ng='中学2年(OB/OG)';break;case'中学2年(OB/OG)':ng='中学3年(OB/OG)';break;case'中学3年(OB/OG)':ng='高校生以上(OB/OG)';break;}
-                    // 🛑 ここも getDocRef を使用！進級処理のエラーが消えます
-                    batch.update(getDocRef('members', m.id), { grade:ng, status:'updated', payments:{term1:false,term2:false,track:false,insurance:false} });
+                    updateDoc(getDocRef('members', m.id), { grade:ng, status:'updated', payments:{term1:false,term2:false,track:false,insurance:false} });
                   });
-                  await batch.commit(); alert('進級処理が完了しました。');
+                  alert('進級処理が完了しました。');
                 }} className="w-full bg-rose-600 text-white font-bold py-4 rounded-xl shadow">一括進級処理を実行</button>
               </div>
               <button onClick={onLogout} className="w-full py-4 text-slate-400 text-sm font-bold underline">ログアウト</button>
@@ -536,11 +549,11 @@
       );
     }
 
-    // --- 印刷用テンプレート (PDFレイアウト完全再現) ---
+    // --- 印刷用テンプレート (PDFレイアウトの完全再現) ---
     function PrintTemplate({ member, onClose }) {
       const d = new Date().toLocaleDateString('ja-JP');
       return (
-        <div className="fixed inset-0 bg-slate-900/90 z-[100] flex justify-center overflow-y-auto no-print:py-4">
+        <div className="fixed inset-0 bg-slate-900/90 z-[100] flex justify-center py-4 overflow-y-auto no-print:py-2">
           <div id="print-root" className="bg-white w-[210mm] min-h-[297mm] p-12 shadow-2xl relative text-black text-[13px] font-sans">
             <div className="no-print absolute top-4 right-4 flex gap-2">
               <button onClick={() => window.print()} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center"><Printer size={16} className="mr-2"/>印刷</button>
